@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use dbex::SimpleJSONDB;
+use dbex::DBex;
 use serde_json::json;
 use std::time::Instant;
 
@@ -8,7 +8,7 @@ fn throughput_benchmark(c: &mut Criterion) {
     
     // Measure insert throughput (ops/sec)
     group.bench_function("insert_throughput", |b| {
-        let mut db = SimpleJSONDB::new("bench_throughput.json");
+        let mut db = DBex::new("bench_throughput.json");
         let doc = json!({
             "name": "Throughput Test",
             "age": 30,
@@ -26,7 +26,7 @@ fn throughput_benchmark(c: &mut Criterion) {
     
     // Measure query throughput
     group.bench_function("query_throughput", |b| {
-        let mut db = SimpleJSONDB::new("bench_query_throughput.json");
+        let mut db = DBex::new("bench_query_throughput.json");
         
         // Pre-populate with 1000 docs
         for i in 0..1000 {

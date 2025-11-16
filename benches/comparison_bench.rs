@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use dbex::SimpleJSONDB;
+use dbex::DBex;
 use serde_json::json;
 use mongodb::bson::Document;
 
@@ -8,7 +8,7 @@ fn comparison_benchmark(c: &mut Criterion) {
     
     // Your DB: Insert benchmark
     group.bench_function("dbex_insert_10", |b| {
-        let mut db = SimpleJSONDB::new("bench_comparison.json");
+        let mut db = DBex::new("bench_comparison.json");
         let doc = json!({
             "name": "Test User",
             "age": 30,
@@ -24,7 +24,7 @@ fn comparison_benchmark(c: &mut Criterion) {
     
     // Your DB: Query benchmark
     group.bench_function("dbex_query", |b| {
-        let mut db = SimpleJSONDB::new("bench_comparison_query.json");
+        let mut db = DBex::new("bench_comparison_query.json");
         
         // Setup - smaller dataset
         for i in 0..100 {

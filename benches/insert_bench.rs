@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
-use dbex::SimpleJSONDB;
+use dbex::DBex;
 use serde_json::json;
 
 fn insert_benchmark(c: &mut Criterion) {
@@ -7,7 +7,7 @@ fn insert_benchmark(c: &mut Criterion) {
     
     // Benchmark single insert
     group.bench_function("single_insert", |b| {
-        let mut db = SimpleJSONDB::new("bench_insert.json");
+        let mut db = DBex::new("bench_insert.json");
         let doc = json!({
             "name": "Test User",
             "age": 30,
@@ -27,7 +27,7 @@ fn insert_benchmark(c: &mut Criterion) {
             BenchmarkId::new("batch_insert", size),
             size,
             |b, &size| {
-                let mut db = SimpleJSONDB::new("bench_batch.json");
+                let mut db = DBex::new("bench_batch.json");
                 let doc = json!({
                     "name": "Test User",
                     "age": 30,

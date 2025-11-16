@@ -1,11 +1,11 @@
-use dbex::SimpleJSONDB;
+use dbex::DBex;
 use serde_json::json;
 
 fn main() {
     println!("Testing Database with Dict-Style Objects\n");
     println!("==========================================\n");
 
-    let mut db = SimpleJSONDB::new("test_db.json");
+    let mut db = DBex::new("test_db.json");
 
     // Test 1: Insert documents
     println!("Test 1: Insert documents");

@@ -1,9 +1,9 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
-use dbex::SimpleJSONDB;
+use dbex::DBex;
 use serde_json::json;
 
-fn setup_db_with_data(size: usize) -> SimpleJSONDB {
-    let mut db = SimpleJSONDB::new("bench_query_setup.json");
+fn setup_db_with_data(size: usize) -> DBex {
+    let mut db = DBex::new("bench_query_setup.json");
     
     for i in 0..size {
         db.insert(json!({
