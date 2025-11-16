@@ -60,7 +60,3 @@ scripts/
 ## Benchmarks
 
 View benchmark results in `target/criterion/` after running `cargo bench`.
-
-## Documentation
-
-See `/claude/` folder for detailed documentation and learning resources.

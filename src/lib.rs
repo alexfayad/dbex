@@ -46,7 +46,6 @@ impl Document {
 
 pub type Query = Document;
 
-#[allow(dead_code)]
 pub struct DBex {
     data: HashMap<u64, Document>,
     storage_path: String,
