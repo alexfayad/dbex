@@ -1,0 +1,33 @@
+# Rust
+/target/
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database files
+*.json
+!Cargo.json
+
+# MongoDB data
+mongo_data/
+mongo.log
+
+# Claude data
+claude/
+
+# Benchmark results (keep in git, but ignore generated data)
+# target/criterion/ is already ignored by /target/
+
+# Temporary files
+*.tmp
+*.bak
+
