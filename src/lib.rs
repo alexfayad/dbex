@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-// BSON encoding/decoding module
 mod bson;
 pub use bson::{encode_document, decode_document};
 
@@ -27,8 +26,8 @@ pub struct Document {
 }
 
 impl Document {
-    pub fn new(_id: u64) -> Self {
-        Document { id: _id, data: HashMap::new() }
+    pub fn new() -> Self {
+        Document { id: 0, data: HashMap::new() }
     }
 
     pub fn insert(&mut self, key: String, value: BsonValue) {
@@ -54,20 +53,28 @@ pub struct DBex {
 
 impl DBex {
     pub fn new(_storage_path: &str) -> Self {
+        // Ensure .dbex extension
+        let storage_path = if _storage_path.ends_with(".dbex") {
+            _storage_path.to_string()
+        } else {
+            format!("{}.dbex", _storage_path)
+        };
+        
         let mut db = DBex {
             data: HashMap::new(),
-            storage_path: _storage_path.to_string(),
+            storage_path,
             next_id: 1,
         };
         db.load(); // Load existing data if file exists
         db
     }
 
-    pub fn insert(&mut self, _document: Document) -> u64 {
+    pub fn insert(&mut self, mut _document: Document) -> u64 {
         let id = self.next_id;
-        self.next_id += 1;
+        _document.id = id;
         self.data.insert(id, _document);
         self.save();
+        self.next_id += 1;
         id
     }
 
@@ -76,14 +83,15 @@ impl DBex {
     }
 
     pub fn find_all(&self) -> Vec<Document> {
-        self.data.values()
+        self.data
+            .values()
             .cloned()
             .collect()
     }
 
     pub fn find(&self, _query: &Query) -> Vec<Document> {
         self.data.values()
-            .filter(|doc: &&Document| doc == &_query)
+            .filter(|doc: &&Document| doc.data == _query.data)
             .cloned()
             .collect()
     }
@@ -133,24 +141,34 @@ impl DBex {
         ids_to_delete.len() as usize
     }
 
-    /// Save data to disk
     fn save(&self) {
-        let data = self.data.iter()
-            .map(|(_, doc)| encode_document(doc))
-            .collect::<Vec<Vec<u8>>>();
-        let data: Vec<u8> = data.iter().flatten().copied().collect();
-        std::fs::write(&self.storage_path, data).unwrap();
+        if let Some(parent) = std::path::Path::new(&self.storage_path).parent() {
+            std::fs::create_dir_all(parent).unwrap_or_default();
+        }
+        
+        let mut file_data = Vec::new();
+        
+        for (_, doc) in &self.data {
+            let encoded = encode_document(doc);
+            file_data.extend_from_slice(&encoded);
+        }
+        
+        std::fs::write(&self.storage_path, file_data).unwrap();
     }
 
-    /// Load data from disk
     fn load(&mut self) {
         if std::path::Path::new(&self.storage_path).exists() {
-            let data = std::fs::read(&self.storage_path).unwrap();
-            let data = data.split(|&b| b == 0u8).collect::<Vec<&[u8]>>();
-            for data in data.iter() {
-                if let Ok(doc) = decode_document(data) {
-                    self.data.insert(doc.id, doc);
-                }
+            let data = std::fs::read(&self.storage_path).unwrap_or_default();
+
+            if data.len() == 0 {
+                println!("No data found in storage file.");
+                return;
+            }
+
+            if let Ok(doc) = decode_document(&data) {
+                self.insert(doc);
+            } else {
+                panic!("Unable to decode document from storage.");
             }
         }
     }
@@ -159,27 +177,51 @@ impl DBex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    
+    // Helper to get test database path
+    fn test_db_path(name: &str) -> String {
+        format!("test_data/{}", name)
+    }
+
+    // Helper to delete test database
+    fn test_delete_db(name: &str) {
+        if std::path::Path::new(&test_db_path(name)).exists() {
+            let _ = std::fs::remove_file(&test_db_path(name));
+        }
+    }
+
+    #[test]
+    fn test_encode_decode() {
+        let mut doc = Document::new();
+        doc.insert("name".to_string(), BsonValue::String("test".to_string()));
+        let encoded = encode_document(&doc);
+        let decoded = decode_document(&encoded).unwrap_or_else(|e| panic!("Unable to decode document: {}", e));
+        assert_eq!(doc, decoded);
+    }
 
     #[test]
     fn test_new() {
-        let _db = DBex::new("test_db");
-        // Add assertions once implementation is complete
+        let _db = DBex::new(&test_db_path("test_db"));
     }
 
     #[test]
     fn test_insert() {
-        let mut db = DBex::new("test_db");
-        let mut document = Document::new(1);
+        test_delete_db("test_db");
+        let mut db = DBex::new(&test_db_path("test_db"));
+        let mut document = Document::new();
         document.insert("name".to_string(), BsonValue::String("test".to_string()));
         println!("document: {:?}", document);
         let id = db.insert(document);
-        assert!(id != 0);
+        assert_ne!(id, 0);
+        assert_eq!(db.delete_by_id(&id), 1);
+        assert!(db.find_by_id(&id).is_none());
     }
 
     #[test]
     fn test_find_by_id() {
-        let mut db = DBex::new("test_db");
-        let mut document = Document::new(1);
+        test_delete_db("test_db");
+        let mut db = DBex::new(&test_db_path("test_db"));
+        let mut document = Document::new();
         document.insert("name".to_string(), BsonValue::String("test".to_string()));
         let id = db.insert(document.clone());
         
@@ -191,17 +233,19 @@ mod tests {
 
     #[test]
     fn test_find_by_id_not_found() {
-        let db = DBex::new("test_db");
+        test_delete_db("test_db");
+        let db = DBex::new(&test_db_path("test_db"));
         let found = db.find_by_id(&0);
         assert!(found.is_none());
     }
 
     #[test]
     fn test_find_all() {
-        let mut db = DBex::new("test_db");
-        let mut doc1 = Document::new(1);
+        test_delete_db("test_db_find_all");
+        let mut db = DBex::new(&test_db_path("test_db_find_all"));
+        let mut doc1 = Document::new();
         doc1.insert("name".to_string(), BsonValue::String("doc1".to_string()));
-        let mut doc2 = Document::new(2);
+        let mut doc2 = Document::new();
         doc2.insert("name".to_string(), BsonValue::String("doc2".to_string()));
         
         db.insert(doc1);
@@ -213,23 +257,25 @@ mod tests {
 
     #[test]
     fn test_find_all_empty() {
-        let db = DBex::new("test_db");
+        test_delete_db("test_db");
+        let db = DBex::new(&test_db_path("test_db"));
         let all = db.find_all();
         assert_eq!(all.len(), 0);
     }
 
     #[test]
     fn test_find() {
-        let mut db = DBex::new("test_db");
-        let mut doc1 = Document::new(1);
+        test_delete_db("test_db");
+        let mut db = DBex::new(&test_db_path("test_db"));
+        let mut doc1 = Document::new();
         doc1.insert("name".to_string(), BsonValue::String("doc1".to_string()));
-        let mut doc2 = Document::new(2);
+        let mut doc2 = Document::new();
         doc2.insert("name".to_string(), BsonValue::String("doc2".to_string()));
         
         db.insert(doc1);
         db.insert(doc2);
         
-        let mut query = Query::new(1);
+        let mut query = Query::new();
         query.insert("name".to_string(), BsonValue::String("doc1".to_string()));
         let results = db.find(&query);
         // Add specific assertions once query format is defined
@@ -238,12 +284,13 @@ mod tests {
 
     #[test]
     fn test_find_no_matches() {
-        let mut db = DBex::new("test_db");
-        let mut doc = Document::new(1);
+        test_delete_db("test_db");
+        let mut db = DBex::new(&test_db_path("test_db"));
+        let mut doc = Document::new();
         doc.insert("name".to_string(), BsonValue::String("test".to_string()));
         db.insert(doc);
         
-        let mut query = Query::new(1);
+        let mut query = Query::new();
         query.insert("name".to_string(), BsonValue::String("nonexistent".to_string()));
         let results = db.find(&query);
         assert_eq!(results.len(), 0);
@@ -251,14 +298,15 @@ mod tests {
 
     #[test]
     fn test_update() {
-        let mut db = DBex::new("test_db");
-        let mut doc = Document::new(1);
+        test_delete_db("test_db");
+        let mut db = DBex::new(&test_db_path("test_db"));
+        let mut doc = Document::new();
         doc.insert("name".to_string(), BsonValue::String("original".to_string()));
         let _id = db.insert(doc);
         
-        let mut query = Query::new(1);
+        let mut query = Query::new();
         query.insert("name".to_string(), BsonValue::String("original".to_string()));
-        let mut updates = Document::new(1);
+        let mut updates = Document::new();
         updates.insert("name".to_string(), BsonValue::String("updated".to_string()));
         let _count = db.update(&query, &updates);
         // Add assertions once implementation is complete
@@ -266,14 +314,15 @@ mod tests {
 
     #[test]
     fn test_update_no_matches() {
-        let mut db = DBex::new("test_db");
-        let mut doc = Document::new(1);
+        test_delete_db("test_db");
+        let mut db = DBex::new(&test_db_path("test_db"));
+        let mut doc = Document::new();
         doc.insert("name".to_string(), BsonValue::String("test".to_string()));
         db.insert(doc);
         
-        let mut query = Query::new(1);
+        let mut query = Query::new();
         query.insert("name".to_string(), BsonValue::String("nonexistent".to_string()));
-        let mut updates = Document::new(1);
+        let mut updates = Document::new();
         updates.insert("name".to_string(), BsonValue::String("updated".to_string()));
         let count = db.update(&query, &updates);
         assert_eq!(count, 0);
@@ -281,12 +330,13 @@ mod tests {
 
     #[test]
     fn test_update_by_id() {
-        let mut db = DBex::new("test_db");
-        let mut doc = Document::new(1);
+        test_delete_db("test_db");
+        let mut db = DBex::new(&test_db_path("test_db"));
+        let mut doc = Document::new();
         doc.insert("name".to_string(), BsonValue::String("original".to_string()));
         let id = db.insert(doc);
         
-        let mut updates = Document::new(1);
+        let mut updates = Document::new();
         updates.insert("name".to_string(), BsonValue::String("updated".to_string()));
         updates.insert("age".to_string(), BsonValue::Int32(30));
         
@@ -308,8 +358,9 @@ mod tests {
 
     #[test]
     fn test_update_by_id_not_found() {
-        let mut db = DBex::new("test_db");
-        let mut updates = Document::new(1);
+        test_delete_db("test_db");
+        let mut db = DBex::new(&test_db_path("test_db"));
+        let mut updates = Document::new();
         updates.insert("name".to_string(), BsonValue::String("updated".to_string()));
         
         let nonexistent_id = 999u64;
@@ -319,8 +370,9 @@ mod tests {
 
     #[test]
     fn test_delete_by_id() {
-        let mut db = DBex::new("test_db");
-        let mut doc = Document::new(1);
+        test_delete_db("test_db");
+        let mut db = DBex::new(&test_db_path("test_db"));
+        let mut doc = Document::new();
         doc.insert("name".to_string(), BsonValue::String("to_delete".to_string()));
         let id = db.insert(doc);
         
@@ -333,7 +385,8 @@ mod tests {
 
     #[test]
     fn test_delete_by_id_not_found() {
-        let mut db = DBex::new("test_db");
+        test_delete_db("test_db");
+        let mut db = DBex::new(&test_db_path("test_db"));
         let nonexistent_id = 999u64;
         
         let count = db.delete_by_id(&nonexistent_id);
@@ -342,12 +395,13 @@ mod tests {
 
     #[test]
     fn test_delete() {
-        let mut db = DBex::new("test_db");
-        let mut doc = Document::new(1);
+        test_delete_db("test_db");
+        let mut db = DBex::new(&test_db_path("test_db"));
+        let mut doc = Document::new();
         doc.insert("name".to_string(), BsonValue::String("to_delete".to_string()));
         db.insert(doc);
         
-        let mut query = Query::new(1);
+        let mut query = Query::new();
         query.insert("name".to_string(), BsonValue::String("to_delete".to_string()));
         let _count = db.delete(&query);
         // Add assertions once implementation is complete
@@ -355,12 +409,13 @@ mod tests {
 
     #[test]
     fn test_delete_no_matches() {
-        let mut db = DBex::new("test_db");
-        let mut doc = Document::new(1);
+        test_delete_db("test_db");
+        let mut db = DBex::new(&test_db_path("test_db"));
+        let mut doc = Document::new();
         doc.insert("name".to_string(), BsonValue::String("test".to_string()));
         db.insert(doc);
         
-        let mut query = Query::new(1);
+        let mut query = Query::new();
         query.insert("name".to_string(), BsonValue::String("nonexistent".to_string()));
         let count = db.delete(&query);
         assert_eq!(count, 0);
@@ -368,37 +423,38 @@ mod tests {
 
     #[test]
     fn test_delete_all() {
-        let mut db = DBex::new("test_db");
-        let mut doc1 = Document::new(1);
+        test_delete_db("test_db");
+        let mut db = DBex::new(&test_db_path("test_db"));
+        let mut doc1 = Document::new();
         doc1.insert("name".to_string(), BsonValue::String("doc1".to_string()));
-        let mut doc2 = Document::new(2);
-        doc2.insert("name".to_string(), BsonValue::String("doc2".to_string()));
+        let mut doc2 = Document::new();
+        doc2.insert("name".to_string(), BsonValue::String("doc1".to_string()));
         
         db.insert(doc1);
         db.insert(doc2);
         
         // Assuming a query that matches all documents
-        let mut query = Query::new(1);
-        query.insert("match_all".to_string(), BsonValue::Boolean(true));
-        let _count = db.delete(&query);
-        // Add assertions once implementation is complete
+        let mut query = Query::new();
+        query.insert("name".to_string(), BsonValue::String("doc1".to_string()));
+        let count = db.delete(&query);
+        assert_eq!(count, 2, "Should delete 2 documents");
+        assert_eq!(db.find_all().len(), 0, "Should have 0 documents");
     }
 
     #[test]
     fn test_persistence() {
-        let storage_path = "test_persistence_db";
+        test_delete_db("test_persistence_db");
+        let storage_path = test_db_path("test_persistence_db"); // Will become "test_data/test_persistence_db.dbex"
         {
-            let mut db = DBex::new(storage_path);
-            let mut doc = Document::new(1);
+            let mut db = DBex::new(&storage_path);
+            let mut doc = Document::new();
             doc.insert("name".to_string(), BsonValue::String("persistent".to_string()));
             db.insert(doc);
         }
         
-        // Reopen database and verify data persists
-        let db = DBex::new(storage_path);
+        let db = DBex::new(&storage_path);
         let all = db.find_all();
         
-        // These assertions will fail until save/load is implemented
         assert_eq!(all.len(), 1, "Should have 1 persisted document");
         assert_eq!(all[0].id, 1, "Document ID should be 1");
         assert_eq!(
@@ -406,10 +462,5 @@ mod tests {
             Some(&BsonValue::String("persistent".to_string())),
             "Document should have name='persistent'"
         );
-        
-        // Cleanup
-        if std::path::Path::new(storage_path).exists() {
-            let _ = std::fs::remove_file(storage_path);
-        }
     }
 }

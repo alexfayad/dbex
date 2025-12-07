@@ -31,6 +31,10 @@ fn get_type_byte(value: &BsonValue) -> u8 {
 /// Encode a Document to BSON binary format
 pub fn encode_document(doc: &Document) -> Vec<u8> {
     let mut buffer = Vec::new();
+    // Get Document ID and encode it
+    buffer.extend_from_slice(&doc.id.to_le_bytes());
+
+    // Encode Document data 
     encode_document_internal(&doc.data, &mut buffer);
     buffer
 }
@@ -60,18 +64,28 @@ fn encode_document_internal(data: &std::collections::HashMap<String, BsonValue>,
     buffer[start_pos..start_pos + 4].copy_from_slice(&size_bytes);
 }
 
-/// Encode a single element
-/// Format: [type][key_name][0x00][value_bytes]
-fn encode_element(key: &str, value: &BsonValue, buffer: &mut Vec<u8>) {
-    // [type]
-    let type_byte = get_type_byte(value);
-    buffer.push(type_byte); // [type]
+fn encode_object(data: &std::collections::HashMap<String, BsonValue>, buffer: &mut Vec<u8>) {
+    // Encode each field
+    for (key, value) in data {
+        encode_element(key, value, buffer);
+    }
+    
+    // End of object marker
+    buffer.push(0x00);
+}
 
+/// Encode a single element
+/// Format: [key_name][0x00][type][value_bytes]
+fn encode_element(key: &str, value: &BsonValue, buffer: &mut Vec<u8>) {
     // [key_name]
     buffer.extend_from_slice(key.as_bytes());
 
     // [0x00] (null terminator)
     buffer.push(0x00);
+
+    // [type]
+    let type_byte = get_type_byte(value);
+    buffer.push(type_byte); // [type]
 
     // [value_bytes]
     encode_value(value, buffer);
@@ -88,8 +102,6 @@ fn encode_value(value: &BsonValue, buffer: &mut Vec<u8>) {
         BsonValue::String(s) => {
             // [length: i32][string_bytes][0x00]
             let bytes = s.as_bytes();
-            let length = (bytes.len() + 1) as i32; // +1 for null terminator
-            buffer.extend_from_slice(&length.to_le_bytes());
             buffer.extend_from_slice(bytes);
             buffer.push(0x00);
         }
@@ -110,27 +122,37 @@ fn encode_value(value: &BsonValue, buffer: &mut Vec<u8>) {
         }
         BsonValue::Document(doc) => {
             // Recursive document encoding
-            encode_document_internal(&doc.data, buffer);
+            encode_object(&doc.data, buffer);
         }
         BsonValue::Array(arr) => {
             // Array is encoded like a document with numeric string keys "0", "1", etc.
-            // [size: i32][elements...][0x00]
-            let mut arr_buffer = Vec::new();
+            // Format: [size: i32][elements...][0x00]
+            let mut arr_buffer = Vec::new(); // New buffer for array elements
             for (i, val) in arr.iter().enumerate() {
                 encode_element(&i.to_string(), val, &mut arr_buffer);
             }
+
+            // [0x00] (null terminator)
             arr_buffer.push(0x00);
             
-            // Write array size (including size field itself)
+            // [size: i32]
             let size = (arr_buffer.len() + 4) as i32;
             buffer.extend_from_slice(&size.to_le_bytes());
+
+            // [elements...]
             buffer.extend_from_slice(&arr_buffer);
         }
         BsonValue::Binary(bin) => {
-            // [length: i32][subtype: u8][bytes]
+            // Format: [length: i32][subtype: u8][bytes]
+
+            // [length: i32]
             let length = bin.len() as i32;
             buffer.extend_from_slice(&length.to_le_bytes());
-            buffer.push(0x00); // Generic binary subtype
+
+            // [subtype: u8]
+            buffer.push(0x00);
+
+            // [bytes]
             buffer.extend_from_slice(bin);
         }
     }
@@ -138,90 +160,125 @@ fn encode_value(value: &BsonValue, buffer: &mut Vec<u8>) {
 
 /// Decode BSON binary format to Document
 pub fn decode_document(_bytes: &[u8]) -> Result<Document, String> {
-    let mut buffer = _bytes.to_vec();
-    let doc = decode_document_internal(&mut buffer);
+    let buffer = _bytes.to_vec();
+    let mut pos = 0;
+
+    let doc = decode_internal_document(&buffer, &mut pos);
     Ok(doc)
 }
+fn decode_internal_document(buffer: &Vec<u8>, pos: &mut usize) -> Document{
 
-fn decode_document_internal(buffer: &mut Vec<u8>) -> Document {
-    let mut doc = Document::new(0);
-    while let Some(byte) = buffer.pop() {
-        if byte == 0x00 {
-            break;
-        }
-        let key = decode_string(buffer);
-        let value = decode_value(buffer);
+    let id = u64::from_le_bytes([buffer[*pos], buffer[*pos + 1], buffer[*pos + 2], buffer[*pos + 3], buffer[*pos + 4], buffer[*pos + 5], buffer[*pos + 6], buffer[*pos + 7]]);
+    *pos += 8; // 8 bytes for id
+
+    let mut doc = Document::new();
+    doc.id = id;
+    
+    let size = i32::from_le_bytes([buffer[*pos], buffer[*pos + 1], buffer[*pos + 2], buffer[*pos + 3]]) as usize + 8; // 8 bytes for id
+    *pos += 4;
+
+    while *pos < size {
+        let key = decode_string(buffer, pos);
+        *pos += 1;
+        let type_byte = buffer[*pos];
+        *pos += 1;
+        let value = decode_value(buffer, pos, type_byte);
         doc.insert(key, value);
+        *pos += 1;
     }
     doc
 }
 
-fn decode_string(buffer: &mut Vec<u8>) -> String {
+fn decode_string(buffer: &Vec<u8>, pos: &mut usize) -> String {
     let mut string = String::new();
-    while let Some(byte) = buffer.pop() {
-        if byte == 0x00 {
-            break;
-        }
-        string.push(byte as char);
+    while buffer[*pos] != 0x00 {
+        string.push(buffer[*pos] as char);
+        *pos += 1;
     }
     string
 }
 
-fn decode_value(buffer: &mut Vec<u8>) -> BsonValue {
-    let type_byte = buffer.pop().unwrap();
-    match type_byte {
+fn decode_object(buffer: &Vec<u8>, pos: &mut usize) -> Document{
+    let mut doc = Document::new();
+    while buffer[*pos] != 0x00 {
+        let key = decode_string(buffer, pos);
+        *pos += 1;
+        let type_byte = buffer[*pos];
+        *pos += 1;
+        let value = decode_value(buffer, pos, type_byte);
+        doc.insert(key, value);
+        *pos += 1;
+    }
+    doc
+}
+
+fn decode_value(buffer: &Vec<u8>, pos: &mut usize, type_byte: u8) -> BsonValue {
+
+    let value = match type_byte {
         types::DOUBLE => {
-            // Read 8 bytes (little-endian, but we're reading backwards so reverse)
             let mut bytes = [0u8; 8];
             for i in 0..8 {
-                bytes[7 - i] = buffer.pop().unwrap(); // Read backwards, store forwards
+                bytes[7 - i] = buffer[*pos];
+                *pos += 1;
             }
             let d = f64::from_le_bytes(bytes);
             BsonValue::Double(d)
         }
         types::STRING => {
-            let s = decode_string(buffer);
-            BsonValue::String(s)
+            let string = decode_string(buffer, pos);
+            BsonValue::String(string)
         }
         types::DOCUMENT => {
-            let doc = decode_document_internal(buffer);
+            let doc = decode_object(buffer, pos);
             BsonValue::Document(Box::new(doc))
         }
         types::ARRAY => {
-            // TODO: Implement decode_array
-            BsonValue::Array(Vec::new())
+            let mut array = Vec::new();
+            while buffer[*pos] != 0x00 {
+                array.push(decode_value(buffer, pos, buffer[*pos]));
+            }
+            BsonValue::Array(array)
         }
         types::BINARY => {
-            // TODO: Implement decode_binary
-            BsonValue::Binary(Vec::new())
+            // Format: [length: i32][subtype: u8][bytes]
+            let length = buffer[*pos] as i32;
+            *pos += 1;
+            let mut bytes = Vec::new();
+            for _ in 0..length {
+                bytes.push(buffer[*pos]);
+                *pos += 1;
+            }
+            BsonValue::Binary(bytes)
         }
         types::BOOLEAN => {
-            let b = buffer.pop().unwrap() == 0x01;
+            let b = buffer[*pos] == 0x01;
             BsonValue::Boolean(b)
         }
         types::NULL => {
             BsonValue::Null
         }
         types::INT32 => {
-            // Read 4 bytes (little-endian, but we're reading backwards so reverse)
+            // Format: [value: i32]
             let mut bytes = [0u8; 4];
             for i in 0..4 {
-                bytes[3 - i] = buffer.pop().unwrap(); // Read backwards, store forwards
+                bytes[3 - i] = buffer[*pos];
+                *pos += 1;
             }
             let i = i32::from_le_bytes(bytes);
             BsonValue::Int32(i)
         }
         types::INT64 => {
-            // Read 8 bytes (little-endian, but we're reading backwards so reverse)
+            // Format: [value: i64]
             let mut bytes = [0u8; 8];
             for i in 0..8 {
-                bytes[7 - i] = buffer.pop().unwrap(); // Read backwards, store forwards
+                bytes[7 - i] = buffer[*pos];
+                *pos += 1;
             }
             let i = i64::from_le_bytes(bytes);
             BsonValue::Int64(i)
         }
-        _ => {
-            BsonValue::Null
-        }
-    }
+        _ => BsonValue::Null,
+    };
+    *pos += 1;
+    value
 }

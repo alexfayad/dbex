@@ -16,6 +16,10 @@ Thumbs.db
 # Database files
 *.json
 !Cargo.json
+*.dbex
+
+# Test data directory
+test_data/
 
 # MongoDB data
 mongo_data/
