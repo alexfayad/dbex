@@ -52,6 +52,8 @@ impl DBex {
             offset,
             len: value_len,
         });
+        // This will suck, we are flushing on every insert
+        // self.flush();
     }
 
     pub fn find(&mut self, key: &[u8]) -> Option<Vec<u8>> {
@@ -72,9 +74,19 @@ impl DBex {
 
     pub fn flush(&mut self) {
         self.file.flush().unwrap();
+        self.file.get_ref().sync_all().unwrap();
     }
 
     pub fn len(&self) -> usize {
         self.index.len()
+    }
+
+    pub fn start_txn(&mut self) {
+        unimplemented!("This function is not yet implemented.")
+    }
+
+    pub fn commit_txn(&mut self) {
+        // Write to WAL or some shit
+        self.flush();
     }
 }

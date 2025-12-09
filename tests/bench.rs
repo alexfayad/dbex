@@ -1,4 +1,4 @@
-// src/bin/bench.rs
+// Integration tests for benchmarks - these will show up in IntelliJ's test sidebar
 use dbex::DBex;
 use std::time::{Duration, Instant};
 use rand::Rng;
@@ -134,33 +134,27 @@ fn run_benchmark(name: &str, num_keys: usize, value_size: usize, num_reads: usiz
     let _ = std::fs::remove_file(&db_path);
 }
 
-fn main() {
-    println!("DBex Benchmark Suite");
-    println!("====================\n");
-
-    // Tiny: everything in CPU cache
+#[test]
+fn bench_tiny() {
     run_benchmark("tiny", 1_000, 100, 10_000);
+}
 
-    // Small: fits comfortably in RAM
+#[test]
+fn bench_small() {
     run_benchmark("small", 100_000, 100, 10_000);
+}
 
-    // Medium: still fits in RAM but more pressure
+#[test]
+fn bench_medium() {
     run_benchmark("medium", 1_000_000, 100, 10_000);
+}
 
-    // Large: 1GB of data, will stress memory
+#[test]
+fn bench_large() {
     run_benchmark("large", 1_000_000, 1_000, 10_000);
+}
 
-    // Huge: 10GB of data, will stress memory, uncomment when you want to feel pain:
-    // run_benchmark("huge", 10_000_000, 1_000, 10_000);
-
-    // Testing RAM boundary for my machine, which appears to be around 2-4GB where my machine
-    // can no longer cache the file.
-    for size_mb in [100, 500, 1000, 2000, 4000, 8000, 16000] {
-        let num_keys = (size_mb * 1_000_000) / (8 + 1000);  // key + value size
-        run_benchmark(&format!("{}mb", size_mb), num_keys, 1000, 10_000);
-    }
-
-    // Large dataset with many more reads, hotter cache friendly
+#[test]
+fn bench_large_heavy_reads() {
     run_benchmark("large_heavy_reads", 1_000_000, 8_000, 100_000);
-
 }
