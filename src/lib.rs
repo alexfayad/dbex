@@ -67,6 +67,9 @@ impl DBex {
     pub fn find(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         let loc = self.index.get(key)?;
 
+        // Flush data from application's memory → OS kernel buffer
+        self.file.flush().ok();
+
         let value_offset = loc.offset + 4 + key.len() as u64 + 4;
 
         let file = self.file.get_mut();
@@ -94,7 +97,8 @@ impl DBex {
 
     pub fn commit_txn(&mut self) {
         // Write to WAL or some shit
-        self.flush();
+        // then flush or some shit
+        unimplemented!("This function is not yet implemented.")
     }
 
     fn save_index(&self) -> io::Result<()> {
