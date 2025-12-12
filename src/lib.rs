@@ -1,15 +1,18 @@
 // src/lib.rs
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write, BufWriter};
-use std::path::Path;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Seek, SeekFrom, Write, BufWriter};
+use std::path::{Path, PathBuf};
+use bincode::{Encode, Decode};
 
 pub struct DBex {
     index: HashMap<Vec<u8>, ValueLocation>,
     file: BufWriter<File>,
+    path_buf: PathBuf,
     write_pos: u64,
 }
 
+#[derive(Encode, Decode, Debug)]
 struct ValueLocation {
     offset: u64,
     len: u32,
@@ -17,6 +20,9 @@ struct ValueLocation {
 
 impl DBex {
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
+
+        let path_buf = path.as_ref().to_path_buf();
+
         let file = OpenOptions::new()
             .create(true)
             .read(true)
@@ -24,11 +30,15 @@ impl DBex {
             .open(path)
             .expect("Failed to open database file");
 
-        let write_pos = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let write_pos =
+            file.metadata().map(|m| m.len()).unwrap_or(0);
+        let index =
+            Self::load_index(path_buf.as_path()).unwrap_or(HashMap::new());
 
         DBex {
-            index: HashMap::new(),
+            index,
             file: BufWriter::new(file),
+            path_buf,
             write_pos,
         }
     }
@@ -52,17 +62,13 @@ impl DBex {
             offset,
             len: value_len,
         });
-        // This will suck, we are flushing on every insert
-        // self.flush();
     }
 
     pub fn find(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         let loc = self.index.get(key)?;
 
-        // Calculate where value starts
         let value_offset = loc.offset + 4 + key.len() as u64 + 4;
 
-        // Need raw file access for seeking
         let file = self.file.get_mut();
         file.seek(SeekFrom::Start(value_offset)).unwrap();
 
@@ -75,6 +81,7 @@ impl DBex {
     pub fn flush(&mut self) {
         self.file.flush().unwrap();
         self.file.get_ref().sync_all().unwrap();
+        self.save_index().unwrap();
     }
 
     pub fn len(&self) -> usize {
@@ -88,5 +95,21 @@ impl DBex {
     pub fn commit_txn(&mut self) {
         // Write to WAL or some shit
         self.flush();
+    }
+
+    fn save_index(&self) -> io::Result<()> {
+        let bytes = bincode::encode_to_vec(&self.index, bincode::config::standard())
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let index_path = self.path_buf.with_extension("db.index");
+        fs::write(index_path, bytes)?;
+        Ok(())
+    }
+
+    fn load_index(path: &Path) -> io::Result<HashMap<Vec<u8>, ValueLocation>> {
+        let bytes = fs::read(path.with_extension("db.index"))?;
+        let (index, _len): (HashMap<Vec<u8>, ValueLocation>, usize) =
+            bincode::decode_from_slice(&bytes, bincode::config::standard())
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        Ok(index)
     }
 }

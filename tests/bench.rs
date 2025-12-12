@@ -1,7 +1,14 @@
 // Integration tests for benchmarks - these will show up in IntelliJ's test sidebar
 use dbex::DBex;
 use std::time::{Duration, Instant};
+use std::fs;
 use rand::Rng;
+
+// Helper function to cleanup both db and index files
+fn cleanup(path: &str) {
+    fs::remove_file(path).ok();
+    fs::remove_file(format!("{}.index", path)).ok();
+}
 
 struct BenchResult {
     operation: String,
@@ -111,9 +118,9 @@ fn bench_zipfian_reads(db: &mut DBex, num_reads: usize, key_space: usize) -> Ben
 }
 
 fn run_benchmark(name: &str, num_keys: usize, value_size: usize, num_reads: usize) {
-    // Clean up any previous test file
+    // Clean up any previous test files
     let db_path = format!("bench_{}.db", name);
-    let _ = std::fs::remove_file(&db_path);
+    cleanup(&db_path);
 
     let mut db = DBex::new(&db_path);
 
@@ -131,7 +138,7 @@ fn run_benchmark(name: &str, num_keys: usize, value_size: usize, num_reads: usiz
 
     // Cleanup
     drop(db);
-    let _ = std::fs::remove_file(&db_path);
+    cleanup(&db_path);
 }
 
 #[test]
