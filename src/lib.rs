@@ -37,7 +37,7 @@ impl DBex {
 
         DBex {
             index,
-            file: BufWriter::new(file),
+            file: BufWriter::with_capacity(16 * 1024 * 1024, file),  // 64MB buffer
             path_buf,
             write_pos,
         }
@@ -66,9 +66,6 @@ impl DBex {
 
     pub fn find(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         let loc = self.index.get(key)?;
-
-        // // Flush data from application's memory → OS kernel buffer
-        // self.file.flush().ok();
 
         let value_offset = loc.offset + 4 + key.len() as u64 + 4;
 
