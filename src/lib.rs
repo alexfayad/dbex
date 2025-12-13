@@ -1,12 +1,12 @@
 // src/lib.rs
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write, BufWriter};
 use std::path::{Path, PathBuf};
 use bincode::{Encode, Decode};
 
 pub struct DBex {
-    index: HashMap<Vec<u8>, ValueLocation>,
+    index: BTreeMap<Vec<u8>, ValueLocation>,
     file: BufWriter<File>,
     path_buf: PathBuf,
     write_pos: u64,
@@ -33,7 +33,7 @@ impl DBex {
         let write_pos =
             file.metadata().map(|m| m.len()).unwrap_or(0);
         let index =
-            Self::load_index(path_buf.as_path()).unwrap_or(HashMap::new());
+            Self::load_index(path_buf.as_path()).unwrap_or(BTreeMap::new());
 
         DBex {
             index,
@@ -67,8 +67,8 @@ impl DBex {
     pub fn find(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         let loc = self.index.get(key)?;
 
-        // Flush data from application's memory → OS kernel buffer
-        self.file.flush().ok();
+        // // Flush data from application's memory → OS kernel buffer
+        // self.file.flush().ok();
 
         let value_offset = loc.offset + 4 + key.len() as u64 + 4;
 
@@ -109,9 +109,9 @@ impl DBex {
         Ok(())
     }
 
-    fn load_index(path: &Path) -> io::Result<HashMap<Vec<u8>, ValueLocation>> {
+    fn load_index(path: &Path) -> io::Result<BTreeMap<Vec<u8>, ValueLocation>> {
         let bytes = fs::read(path.with_extension("db.index"))?;
-        let (index, _len): (HashMap<Vec<u8>, ValueLocation>, usize) =
+        let (index, _len): (BTreeMap<Vec<u8>, ValueLocation>, usize) =
             bincode::decode_from_slice(&bytes, bincode::config::standard())
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         Ok(index)

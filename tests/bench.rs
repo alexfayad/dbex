@@ -1,7 +1,8 @@
 // Integration tests for benchmarks - these will show up in IntelliJ's test sidebar
 use dbex::DBex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use std::fs;
+use std::path::PathBuf;
 use rand::Rng;
 
 // Helper function to cleanup both db and index files
@@ -10,24 +11,50 @@ fn cleanup(path: &str) {
     fs::remove_file(format!("{}.index", path)).ok();
 }
 
+// Get versioned bench run directory
+fn get_bench_dir() -> PathBuf {
+    let version = env!("CARGO_PKG_VERSION");
+    let timestamp = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let dir = PathBuf::from(format!("bench_runs/v{}__{}", version, timestamp));
+    fs::create_dir_all(&dir).ok();
+    dir
+}
+
 struct BenchResult {
     operation: String,
     count: usize,
     total_time: Duration,
     ops_per_sec: f64,
     avg_latency_us: f64,
+    throughput_mb_s: Option<f64>,  // MB/s if applicable
 }
 
 impl BenchResult {
     fn print(&self) {
-        println!(
-            "{:<20} {:>10} ops in {:>10.2?} ({:>12.0} ops/sec, {:>8.2} µs/op)",
-            self.operation,
-            self.count,
-            self.total_time,
-            self.ops_per_sec,
-            self.avg_latency_us,
-        );
+        if let Some(mb_s) = self.throughput_mb_s {
+            println!(
+                "{:<20} {:>10} ops in {:>10.2?} ({:>12.0} ops/sec, {:>8.2} µs/op, {:>8.1} MB/s)",
+                self.operation,
+                self.count,
+                self.total_time,
+                self.ops_per_sec,
+                self.avg_latency_us,
+                mb_s,
+            );
+        } else {
+            println!(
+                "{:<20} {:>10} ops in {:>10.2?} ({:>12.0} ops/sec, {:>8.2} µs/op)",
+                self.operation,
+                self.count,
+                self.total_time,
+                self.ops_per_sec,
+                self.avg_latency_us,
+            );
+        }
     }
 }
 
@@ -51,16 +78,20 @@ fn bench_sequential_writes(db: &mut DBex, num_keys: usize, value_size: usize) ->
     db.flush();
     let total_time = start.elapsed();
 
+    let total_bytes = num_keys * (8 + value_size);  // 8 byte keys + value_size
+    let throughput_mb_s = (total_bytes as f64 / 1_000_000.0) / total_time.as_secs_f64();
+
     BenchResult {
         operation: "sequential_write".into(),
         count: num_keys,
         total_time,
         ops_per_sec: num_keys as f64 / total_time.as_secs_f64(),
         avg_latency_us: total_time.as_micros() as f64 / num_keys as f64,
+        throughput_mb_s: Some(throughput_mb_s),
     }
 }
 
-fn bench_random_reads(db: &mut DBex, num_reads: usize, key_space: usize) -> BenchResult {
+fn bench_random_reads(db: &mut DBex, num_reads: usize, key_space: usize, value_size: usize) -> BenchResult {
     let mut rng = rand::rng();
 
     let start = Instant::now();
@@ -71,16 +102,20 @@ fn bench_random_reads(db: &mut DBex, num_reads: usize, key_space: usize) -> Benc
     }
     let total_time = start.elapsed();
 
+    let total_bytes = num_reads * (8 + value_size);
+    let throughput_mb_s = (total_bytes as f64 / 1_000_000.0) / total_time.as_secs_f64();
+
     BenchResult {
         operation: "random_read".into(),
         count: num_reads,
         total_time,
         ops_per_sec: num_reads as f64 / total_time.as_secs_f64(),
         avg_latency_us: total_time.as_micros() as f64 / num_reads as f64,
+        throughput_mb_s: Some(throughput_mb_s),
     }
 }
 
-fn bench_sequential_reads(db: &mut DBex, num_reads: usize) -> BenchResult {
+fn bench_sequential_reads(db: &mut DBex, num_reads: usize, value_size: usize) -> BenchResult {
     let start = Instant::now();
     for i in 0..num_reads {
         let key = i.to_be_bytes();
@@ -88,16 +123,20 @@ fn bench_sequential_reads(db: &mut DBex, num_reads: usize) -> BenchResult {
     }
     let total_time = start.elapsed();
 
+    let total_bytes = num_reads * (8 + value_size);
+    let throughput_mb_s = (total_bytes as f64 / 1_000_000.0) / total_time.as_secs_f64();
+
     BenchResult {
         operation: "sequential_read".into(),
         count: num_reads,
         total_time,
         ops_per_sec: num_reads as f64 / total_time.as_secs_f64(),
         avg_latency_us: total_time.as_micros() as f64 / num_reads as f64,
+        throughput_mb_s: Some(throughput_mb_s),
     }
 }
 
-fn bench_zipfian_reads(db: &mut DBex, num_reads: usize, key_space: usize) -> BenchResult {
+fn bench_zipfian_reads(db: &mut DBex, num_reads: usize, key_space: usize, value_size: usize) -> BenchResult {
     let mut rng = rand::rng();
 
     let start = Instant::now();
@@ -108,37 +147,87 @@ fn bench_zipfian_reads(db: &mut DBex, num_reads: usize, key_space: usize) -> Ben
     }
     let total_time = start.elapsed();
 
+    let total_bytes = num_reads * (8 + value_size);
+    let throughput_mb_s = (total_bytes as f64 / 1_000_000.0) / total_time.as_secs_f64();
+
     BenchResult {
         operation: "zipfian_read".into(),
         count: num_reads,
         total_time,
         ops_per_sec: num_reads as f64 / total_time.as_secs_f64(),
         avg_latency_us: total_time.as_micros() as f64 / num_reads as f64,
+        throughput_mb_s: Some(throughput_mb_s),
     }
 }
 
 fn run_benchmark(name: &str, num_keys: usize, value_size: usize, num_reads: usize) {
-    // Clean up any previous test files
-    let db_path = format!("bench_{}.db", name);
-    cleanup(&db_path);
+    // Create versioned directory for this benchmark run
+    let bench_dir = get_bench_dir();
+    let db_path = bench_dir.join(format!("{}.db", name));
+    let db_path_str = db_path.to_str().unwrap();
 
-    let mut db = DBex::new(&db_path);
+    let mut db = DBex::new(&db_path_str);
 
     let data_size_mb = (num_keys * (8 + value_size)) as f64 / 1_000_000.0;
 
-    println!("\n{}", format!("{:=<60}", ""));
-    println!("Benchmark: {}", name);
-    println!("Keys: {}, Value size: {} bytes, Total data: {:.1} MB", num_keys, value_size, data_size_mb);
-    println!("\n{}", format!("{:=<60}", ""));
+    // Collect results
+    let mut output = String::new();
+    output.push_str(&format!("\n{}\n", "=".repeat(60)));
+    output.push_str(&format!("Benchmark: {}\n", name));
+    output.push_str(&format!("Keys: {}, Value size: {} bytes, Total data: {:.1} MB\n", num_keys, value_size, data_size_mb));
+    output.push_str(&format!("\n{}\n", "=".repeat(60)));
 
-    bench_sequential_writes(&mut db, num_keys, value_size).print();
-    bench_sequential_reads(&mut db, num_reads.min(num_keys)).print();
-    bench_random_reads(&mut db, num_reads, num_keys).print();
-    bench_zipfian_reads(&mut db, num_reads, num_keys).print();
+    println!("{}", output);
 
-    // Cleanup
+    let write_result = bench_sequential_writes(&mut db, num_keys, value_size);
+    let seq_read_result = bench_sequential_reads(&mut db, num_reads.min(num_keys), value_size);
+    let random_read_result = bench_random_reads(&mut db, num_reads, num_keys, value_size);
+    let zipfian_result = bench_zipfian_reads(&mut db, num_reads, num_keys, value_size);
+
+    write_result.print();
+    seq_read_result.print();
+    random_read_result.print();
+    zipfian_result.print();
+
+    // Append results to output
+    output.push_str(&format_result(&write_result));
+    output.push_str(&format_result(&seq_read_result));
+    output.push_str(&format_result(&random_read_result));
+    output.push_str(&format_result(&zipfian_result));
+    output.push_str("\n");
+
+    // Save results to file
+    let results_file = bench_dir.join(format!("{}.txt", name));
+    fs::write(&results_file, output).ok();
+
+    // Cleanup database files
     drop(db);
-    cleanup(&db_path);
+    cleanup(db_path_str);
+
+    println!("Results saved to: {}", results_file.display());
+}
+
+fn format_result(result: &BenchResult) -> String {
+    if let Some(mb_s) = result.throughput_mb_s {
+        format!(
+            "{:<20} {:>10} ops in {:>10.2?} ({:>12.0} ops/sec, {:>8.2} µs/op, {:>8.1} MB/s)\n",
+            result.operation,
+            result.count,
+            result.total_time,
+            result.ops_per_sec,
+            result.avg_latency_us,
+            mb_s,
+        )
+    } else {
+        format!(
+            "{:<20} {:>10} ops in {:>10.2?} ({:>12.0} ops/sec, {:>8.2} µs/op)\n",
+            result.operation,
+            result.count,
+            result.total_time,
+            result.ops_per_sec,
+            result.avg_latency_us,
+        )
+    }
 }
 
 #[test]
@@ -163,5 +252,10 @@ fn bench_large() {
 
 #[test]
 fn bench_large_heavy_reads() {
-    run_benchmark("large_heavy_reads", 1_000_000, 8_000, 100_000);
+    run_benchmark("large_heavy_reads", 1_000_000, 1_000, 100_000);
+}
+
+#[test]
+fn bench_large_heavy_reads_and_writes() {
+    run_benchmark("large_heavy_reads_and_writes", 1_000_000, 8_000, 100_000);
 }

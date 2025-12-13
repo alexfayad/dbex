@@ -30,6 +30,7 @@ claude/
 
 # Benchmark results (keep in git, but ignore generated data)
 # target/criterion/ is already ignored by /target/
+bench_runs/
 
 # Temporary files
 *.tmp
