@@ -252,3 +252,72 @@ fn bench_large_heavy_reads() {
 fn bench_large_heavy_reads_and_writes() {
     run_benchmark("large_heavy_reads_and_writes", 1_000_000, 8_000, 100_000);
 }
+
+#[test]
+fn bench_huge() {
+    // 10M keys × 1KB = 10GB total data
+    // At 64MB flush threshold → ~160 SSTables
+    // This should expose linear SSTable scan bottleneck
+    run_benchmark("huge", 10_000_000, 1_000, 10_000);
+}
+
+#[test]
+fn bench_many_sstables() {
+    // Test specifically designed to show performance degradation with many SSTables
+    // Write 5GB of data (creates ~80 SSTables at 64MB each)
+    // Then measure how read performance degrades
+
+    let bench_dir = get_bench_dir();
+    let mut db = DBex::new();
+
+    let num_keys = 5_000_000;
+    let value_size = 1_000;
+    let num_reads = 10_000;
+
+    println!("\n{}", "=".repeat(60));
+    println!("Benchmark: many_sstables");
+    println!("Keys: {}, Value size: {} bytes, Total data: {:.1} GB",
+             num_keys, value_size, (num_keys * (8 + value_size)) as f64 / 1_000_000_000.0);
+    println!("Expected SSTables: ~{}", (num_keys * (8 + value_size)) / (64 * 1024 * 1024));
+    println!("{}", "=".repeat(60));
+
+    let mut output = String::new();
+    output.push_str(&format!("\n{}\n", "=".repeat(60)));
+    output.push_str(&format!("Benchmark: many_sstables\n"));
+    output.push_str(&format!("Keys: {}, Value size: {} bytes\n", num_keys, value_size));
+    output.push_str(&format!("\n{}\n", "=".repeat(60)));
+
+    // Write all data
+    println!("\nWriting {} keys...", num_keys);
+    let write_result = bench_sequential_writes(&mut db, num_keys, value_size);
+    write_result.print();
+    output.push_str(&format_result(&write_result));
+
+    // Count SSTables created
+    let sstable_count = fs::read_dir(".")
+        .unwrap()
+        .filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with("ss_table_"))
+        .count() / 2; // Divide by 2 because we have .db and .db.index
+
+    println!("\nSSTables created: {}", sstable_count);
+    output.push_str(&format!("\nSSTables created: {}\n", sstable_count));
+
+    // Now measure read performance with many SSTables
+    println!("\nRunning reads with {} SSTables...", sstable_count);
+    let random_read_result = bench_random_reads(&mut db, num_reads, num_keys, value_size);
+    let zipfian_result = bench_zipfian_reads(&mut db, num_reads, num_keys, value_size);
+
+    random_read_result.print();
+    zipfian_result.print();
+    output.push_str(&format_result(&random_read_result));
+    output.push_str(&format_result(&zipfian_result));
+    // Save results
+    let results_file = bench_dir.join("many_sstables.txt");
+    fs::write(&results_file, output).ok();
+
+    // Cleanup
+    db.purge();
+    drop(db);
+
+    println!("Results saved to: {}", results_file.display());
+}

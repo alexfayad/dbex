@@ -55,7 +55,7 @@ impl DBex {
         }
 
         // 3. Check SSTables (newest to oldest)
-        for ss_table in &self.ss_tables {
+        for ss_table in &mut self.ss_tables {
             if let Some(value) = ss_table.get(key) {
                 return Some(value);
             }

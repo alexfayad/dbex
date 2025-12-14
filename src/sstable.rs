@@ -7,6 +7,7 @@ use crate::memtable::MemTable;
 
 pub struct SSTable {
     data_path: PathBuf,
+    data_file: File,
     index_path: PathBuf,
     index: HashMap<Vec<u8>, u64>,
     min_key: Vec<u8>,
@@ -55,6 +56,7 @@ impl SSTable {
 
         SSTable {
             data_path,
+            data_file,
             index_path,
             index,
             min_key,
@@ -62,14 +64,14 @@ impl SSTable {
         }
     }
 
-    pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
+    pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         if let Some(offset) = self.index.get(key) {
             return self.read_value_at_offset(*offset);
         }
         None  // Key not found in index
     }
 
-    pub fn get_from_index_file(&self, key: &[u8]) -> Option<Vec<u8>> {
+    pub fn get_from_index_file(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         // Fetch index file
         let index_file = File::open(&self.index_path).unwrap();
         let mut reader = BufReader::new(index_file);
@@ -108,13 +110,13 @@ impl SSTable {
         &self.index_path
     }
 
-    fn read_value_at_offset(&self, offset: u64) -> Option<Vec<u8>> {
-        let mut data_file = File::open(&self.data_path).ok()?;
-        data_file.seek(SeekFrom::Start(offset)).ok()?;
+    fn read_value_at_offset(&mut self, offset: u64) -> Option<Vec<u8>> {
+
+        self.data_file.seek(SeekFrom::Start(offset)).ok()?;
 
         // Read value length
         let mut len_bytes = [0u8; 4];
-        data_file.read_exact(&mut len_bytes).ok()?;
+        self.data_file.read_exact(&mut len_bytes).ok()?;
         let value_len = u32::from_be_bytes(len_bytes) as usize;
 
         if value_len == 0xFFFFFFFF {
@@ -123,7 +125,7 @@ impl SSTable {
 
         // Read value
         let mut value = vec![0u8; value_len];
-        data_file.read_exact(&mut value).ok()?;
+        self.data_file.read_exact(&mut value).ok()?;
 
         Some(value)
     }
