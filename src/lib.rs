@@ -56,8 +56,13 @@ impl DBex {
 
         // 3. Check SSTables (newest to oldest)
         for ss_table in &mut self.ss_tables {
-            if let Some(value) = ss_table.get(key) {
-                return Some(value);
+            let min_key = ss_table.min_key();
+            let max_key = ss_table.max_key();
+
+            if key >= min_key && key <= max_key {
+                if let Some(value) = ss_table.get(key) {
+                    return Some(value);
+                }
             }
         }
 

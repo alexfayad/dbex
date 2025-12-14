@@ -110,6 +110,14 @@ impl SSTable {
         &self.index_path
     }
 
+    pub fn min_key (&self) -> &Vec<u8> {
+        &self.min_key
+    }
+
+    pub fn max_key (&self) -> &Vec<u8> {
+        &self.max_key
+    }
+
     fn read_value_at_offset(&mut self, offset: u64) -> Option<Vec<u8>> {
 
         self.data_file.seek(SeekFrom::Start(offset)).ok()?;
