@@ -5,12 +5,6 @@ use std::fs;
 use std::path::PathBuf;
 use rand::Rng;
 
-// Helper function to cleanup both db and index files
-fn cleanup(path: &str) {
-    fs::remove_file(path).ok();
-    fs::remove_file(format!("{}.index", path)).ok();
-}
-
 // Get versioned bench run directory
 fn get_bench_dir() -> PathBuf {
     let version = env!("CARGO_PKG_VERSION");
@@ -72,8 +66,9 @@ fn bench_sequential_writes(db: &mut DBex, num_keys: usize, value_size: usize) ->
 
     let start = Instant::now();
     for i in 0..num_keys {
-        let key = i.to_be_bytes();
-        db.insert(&key, &value);
+        let key = i.to_be_bytes().to_vec();
+        let value = value.clone();
+        db.insert(key, value);
     }
     db.flush();
     let total_time = start.elapsed();
@@ -163,10 +158,8 @@ fn bench_zipfian_reads(db: &mut DBex, num_reads: usize, key_space: usize, value_
 fn run_benchmark(name: &str, num_keys: usize, value_size: usize, num_reads: usize) {
     // Create versioned directory for this benchmark run
     let bench_dir = get_bench_dir();
-    let db_path = bench_dir.join(format!("{}.db", name));
-    let db_path_str = db_path.to_str().unwrap();
 
-    let mut db = DBex::new(&db_path_str);
+    let mut db = DBex::new();
 
     let data_size_mb = (num_keys * (8 + value_size)) as f64 / 1_000_000.0;
 
@@ -201,8 +194,8 @@ fn run_benchmark(name: &str, num_keys: usize, value_size: usize, num_reads: usiz
     fs::write(&results_file, output).ok();
 
     // Cleanup database files
+    db.purge();
     drop(db);
-    cleanup(db_path_str);
 
     println!("Results saved to: {}", results_file.display());
 }
