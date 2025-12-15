@@ -1,19 +1,15 @@
 // Integration tests for DBex functionality
 use dbex::DBex;
-use std::fs;
-use std::path::Path;
 
 // Test guard that ensures cleanup happens even if test panics
 struct TestDb {
-    name: String,
     db: DBex,
 }
 
 impl TestDb {
-    fn new(name: &str) -> Self {
+    fn new() -> Self {
         let db = DBex::new();
         TestDb {
-            name: name.to_string(),
             db
         }
     }
@@ -33,7 +29,7 @@ impl Drop for TestDb {
 
 #[test]
 fn test_basic_insert_and_find() {
-    let mut test_db = TestDb::new("basic");
+    let mut test_db = TestDb::new();
     let db = test_db.db();
 
     db.insert(b"key1".to_vec(), b"value1".to_vec());
@@ -45,7 +41,7 @@ fn test_basic_insert_and_find() {
 
 #[test]
 fn test_find_nonexistent_key() {
-    let mut test_db = TestDb::new("nonexistent");
+    let mut test_db = TestDb::new();
     let db = test_db.db();
 
     db.insert(b"existing".to_vec(), b"value".to_vec());
@@ -55,7 +51,7 @@ fn test_find_nonexistent_key() {
 
 #[test]
 fn test_empty_database() {
-    let mut test_db = TestDb::new("empty");
+    let mut test_db = TestDb::new();
     let db = test_db.db();
 
     assert_eq!(db.memtable().len(), 0);
@@ -64,7 +60,7 @@ fn test_empty_database() {
 
 #[test]
 fn test_overwrite_key() {
-    let mut test_db = TestDb::new("overwrite");
+    let mut test_db = TestDb::new();
     let db = test_db.db();
 
     db.insert(b"key".to_vec(), b"original_value".to_vec());
@@ -76,7 +72,7 @@ fn test_overwrite_key() {
 
 #[test]
 fn test_large_values() {
-    let mut test_db = TestDb::new("large_values");
+    let mut test_db = TestDb::new();
     let db = test_db.db();
 
     let large_value = vec![42u8; 1024 * 1024]; // 1MB value
@@ -87,7 +83,7 @@ fn test_large_values() {
 
 #[test]
 fn test_empty_key_and_value() {
-    let mut test_db = TestDb::new("empty_kv");
+    let mut test_db = TestDb::new();
     let db = test_db.db();
 
     db.insert(b"".to_vec(), b"empty_key".to_vec());
@@ -99,7 +95,7 @@ fn test_empty_key_and_value() {
 
 #[test]
 fn test_binary_data() {
-    let mut test_db = TestDb::new("binary");
+    let mut test_db = TestDb::new();
     let db = test_db.db();
 
     let binary_key = b"\x00\x01\x02\xFF";
@@ -111,7 +107,7 @@ fn test_binary_data() {
 
 #[test]
 fn test_multiple_inserts_and_len() {
-    let mut test_db = TestDb::new("len");
+    let mut test_db = TestDb::new();
     let db = test_db.db();
 
     assert_eq!(db.memtable().len(), 0);
@@ -132,7 +128,7 @@ fn test_multiple_inserts_and_len() {
 
 #[test]
 fn test_flush() {
-    let mut test_db = TestDb::new("flush");
+    let mut test_db = TestDb::new();
     let db = test_db.db();
 
     db.insert(b"key".to_vec(), b"value".to_vec());
@@ -145,7 +141,7 @@ fn test_flush() {
 
 #[test]
 fn test_many_small_keys() {
-    let mut test_db = TestDb::new("many_small");
+    let mut test_db = TestDb::new();
     let db = test_db.db();
 
     let count = 10_000;
@@ -165,7 +161,7 @@ fn test_many_small_keys() {
 
 #[test]
 fn test_memtable_flush_to_sstable() {
-    let mut test_db = TestDb::new("memtable_flush");
+    let mut test_db = TestDb::new();
     let db = test_db.db();
 
     // Insert some data
@@ -187,7 +183,7 @@ fn test_memtable_flush_to_sstable() {
 
 #[test]
 fn test_read_from_multiple_sstables() {
-    let mut test_db = TestDb::new("multiple_sstables");
+    let mut test_db = TestDb::new();
     let db = test_db.db();
 
     // Insert and flush first batch
@@ -207,7 +203,7 @@ fn test_read_from_multiple_sstables() {
 
 #[test]
 fn test_newest_value_wins() {
-    let mut test_db = TestDb::new("newest_wins");
+    let mut test_db = TestDb::new();
     let db = test_db.db();
 
     // Insert and flush old value

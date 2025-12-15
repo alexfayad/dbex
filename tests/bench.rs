@@ -294,10 +294,7 @@ fn bench_many_sstables() {
     output.push_str(&format_result(&write_result));
 
     // Count SSTables created
-    let sstable_count = fs::read_dir(".")
-        .unwrap()
-        .filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with("ss_table_"))
-        .count() / 2; // Divide by 2 because we have .db and .db.index
+    let sstable_count = db.ss_tables().len();
 
     println!("\nSSTables created: {}", sstable_count);
     output.push_str(&format!("\nSSTables created: {}\n", sstable_count));

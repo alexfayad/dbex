@@ -54,6 +54,9 @@ impl SSTable {
         data_file.sync_all().unwrap();
         index_file.sync_all().unwrap();
 
+        // After writing, keep file in open mode versus create mode.
+        let data_file = File::open(&data_path).unwrap();
+
         SSTable {
             data_path,
             data_file,
@@ -120,11 +123,11 @@ impl SSTable {
 
     fn read_value_at_offset(&mut self, offset: u64) -> Option<Vec<u8>> {
 
-        self.data_file.seek(SeekFrom::Start(offset)).ok()?;
+        self.data_file.seek(SeekFrom::Start(offset)).unwrap();
 
         // Read value length
         let mut len_bytes = [0u8; 4];
-        self.data_file.read_exact(&mut len_bytes).ok()?;
+        self.data_file.read_exact(&mut len_bytes).unwrap();
         let value_len = u32::from_be_bytes(len_bytes) as usize;
 
         if value_len == 0xFFFFFFFF {

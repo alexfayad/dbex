@@ -102,4 +102,8 @@ impl DBex {
         // then flush or some shit
         unimplemented!("This function is not yet implemented.")
     }
+
+    pub fn ss_tables(&self) -> &Vec<SSTable> {
+        &self.ss_tables
+    }
 }
