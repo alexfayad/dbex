@@ -1,21 +1,30 @@
 // Integration tests for benchmarks - these will show up in IntelliJ's test sidebar
+mod test_db;
+use test_db::TestDb;
+
 use dbex::DBex;
 use std::time::{Duration, Instant, SystemTime};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use rand::Rng;
 
-// Get versioned bench run directory
-fn get_bench_dir() -> PathBuf {
-    let version = env!("CARGO_PKG_VERSION");
-    let timestamp = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+// Cached bench directory - created once per test run, reused by all benchmarks
+static BENCH_DIR: OnceLock<PathBuf> = OnceLock::new();
 
-    let dir = PathBuf::from(format!("bench_runs/v{}__{}", version, timestamp));
-    fs::create_dir_all(&dir).ok();
-    dir
+// Get versioned bench run directory (creates once, then reuses)
+fn get_bench_dir() -> PathBuf {
+    BENCH_DIR.get_or_init(|| {
+        let version = env!("CARGO_PKG_VERSION");
+        let timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let dir = PathBuf::from(format!("bench_runs/v{}__{}", version, timestamp));
+        fs::create_dir_all(&dir).ok();
+        dir
+    }).clone()
 }
 
 struct BenchResult {
@@ -159,7 +168,8 @@ fn run_benchmark(name: &str, num_keys: usize, value_size: usize, num_reads: usiz
     // Create versioned directory for this benchmark run
     let bench_dir = get_bench_dir();
 
-    let mut db = DBex::new();
+    let mut test_db = TestDb::new();
+    let db = test_db.db();
 
     let data_size_mb = (num_keys * (8 + value_size)) as f64 / 1_000_000.0;
 
@@ -172,15 +182,18 @@ fn run_benchmark(name: &str, num_keys: usize, value_size: usize, num_reads: usiz
 
     println!("{}", output);
 
-    let write_result = bench_sequential_writes(&mut db, num_keys, value_size);
-    let seq_read_result = bench_sequential_reads(&mut db, num_reads.min(num_keys), value_size);
-    let random_read_result = bench_random_reads(&mut db, num_reads, num_keys, value_size);
-    let zipfian_result = bench_zipfian_reads(&mut db, num_reads, num_keys, value_size);
+    let write_result = bench_sequential_writes(db, num_keys, value_size);
+    let seq_read_result = bench_sequential_reads(db, num_reads.min(num_keys), value_size);
+    let random_read_result = bench_random_reads(db, num_reads, num_keys, value_size);
+    let zipfian_result = bench_zipfian_reads(db, num_reads, num_keys, value_size);
+
+    let total_ss_tables = &format!("Total SSTables: {}", db.ss_tables().len());
 
     write_result.print();
     seq_read_result.print();
     random_read_result.print();
     zipfian_result.print();
+    println!("{}", total_ss_tables);
 
     // Append results to output
     output.push_str(&format_result(&write_result));
@@ -188,6 +201,7 @@ fn run_benchmark(name: &str, num_keys: usize, value_size: usize, num_reads: usiz
     output.push_str(&format_result(&random_read_result));
     output.push_str(&format_result(&zipfian_result));
     output.push_str("\n");
+    output.push_str(total_ss_tables);
 
     // Save results to file
     let results_file = bench_dir.join(format!("{}.txt", name));
@@ -195,7 +209,6 @@ fn run_benchmark(name: &str, num_keys: usize, value_size: usize, num_reads: usiz
 
     // Cleanup database files
     db.purge();
-    drop(db);
 
     println!("Results saved to: {}", results_file.display());
 }
@@ -255,66 +268,5 @@ fn bench_large_heavy_reads_and_writes() {
 
 #[test]
 fn bench_huge() {
-    // 10M keys × 1KB = 10GB total data
-    // At 64MB flush threshold → ~160 SSTables
-    // This should expose linear SSTable scan bottleneck
     run_benchmark("huge", 10_000_000, 1_000, 10_000);
-}
-
-#[test]
-fn bench_many_sstables() {
-    // Test specifically designed to show performance degradation with many SSTables
-    // Write 5GB of data (creates ~80 SSTables at 64MB each)
-    // Then measure how read performance degrades
-
-    let bench_dir = get_bench_dir();
-    let mut db = DBex::new();
-
-    let num_keys = 5_000_000;
-    let value_size = 1_000;
-    let num_reads = 10_000;
-
-    println!("\n{}", "=".repeat(60));
-    println!("Benchmark: many_sstables");
-    println!("Keys: {}, Value size: {} bytes, Total data: {:.1} GB",
-             num_keys, value_size, (num_keys * (8 + value_size)) as f64 / 1_000_000_000.0);
-    println!("Expected SSTables: ~{}", (num_keys * (8 + value_size)) / (64 * 1024 * 1024));
-    println!("{}", "=".repeat(60));
-
-    let mut output = String::new();
-    output.push_str(&format!("\n{}\n", "=".repeat(60)));
-    output.push_str(&format!("Benchmark: many_sstables\n"));
-    output.push_str(&format!("Keys: {}, Value size: {} bytes\n", num_keys, value_size));
-    output.push_str(&format!("\n{}\n", "=".repeat(60)));
-
-    // Write all data
-    println!("\nWriting {} keys...", num_keys);
-    let write_result = bench_sequential_writes(&mut db, num_keys, value_size);
-    write_result.print();
-    output.push_str(&format_result(&write_result));
-
-    // Count SSTables created
-    let sstable_count = db.ss_tables().len();
-
-    println!("\nSSTables created: {}", sstable_count);
-    output.push_str(&format!("\nSSTables created: {}\n", sstable_count));
-
-    // Now measure read performance with many SSTables
-    println!("\nRunning reads with {} SSTables...", sstable_count);
-    let random_read_result = bench_random_reads(&mut db, num_reads, num_keys, value_size);
-    let zipfian_result = bench_zipfian_reads(&mut db, num_reads, num_keys, value_size);
-
-    random_read_result.print();
-    zipfian_result.print();
-    output.push_str(&format_result(&random_read_result));
-    output.push_str(&format_result(&zipfian_result));
-    // Save results
-    let results_file = bench_dir.join("many_sstables.txt");
-    fs::write(&results_file, output).ok();
-
-    // Cleanup
-    db.purge();
-    drop(db);
-
-    println!("Results saved to: {}", results_file.display());
 }

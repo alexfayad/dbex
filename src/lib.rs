@@ -1,10 +1,10 @@
 mod memtable;
-mod sstable;
+mod ss_table;
 
 use std::fs;
 // src/lib.rs
 use crate::memtable::MemTable;
-use crate::sstable::SSTable;
+use crate::ss_table::SSTable;
 
 pub struct DBex {
     memtable: MemTable,
