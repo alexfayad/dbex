@@ -1,17 +1,18 @@
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{ SystemTime, UNIX_EPOCH };
 use crate::memtable::MemTable;
 
 pub struct SSTable {
     data_path: PathBuf,
-    data_file: File,
+    data_file: BufReader<File>,
     index_path: PathBuf,
-    index: HashMap<Vec<u8>, u64>,
+    index_file: BufReader<File>,
+    sparse_index: Vec<(Vec<u8>, u64)>,
     min_key: Vec<u8>,
     max_key: Vec<u8>,
+    ss_tables: Vec<SSTable>,
 }
 
 impl SSTable {
@@ -30,23 +31,27 @@ impl SSTable {
         let mut data_bufwriter = BufWriter::new(data_file);
         let mut index_bufwriter = BufWriter::new(index_file);
 
-        let mut offset: u64 = 0;
+        let mut offset = 0u64;
         let mut index_vec = Vec::new();
 
-        for (key, value) in memtable.data() {
+        let mut sparse_index = Vec::new();
+        let mut sparse_offset = 0u64;
+
+        for (i, (key, value)) in memtable.data().iter().enumerate() {
             // Save index entry (key → current offset)
             index_vec.push((key.clone(), offset));
+            offset += Self::write_entry(&mut data_bufwriter, value.clone());
 
-            offset += Self::write_entry(&mut data_bufwriter, value);
+            if i % 100 == 0 {
+                sparse_index.push((key.clone(), sparse_offset));
+            }
+
+            let key_len = key.len() as u32;
+            let entry_size = 4 + key_len as u64 + 8;  // key_len + key + offset
+            sparse_offset += entry_size;
         }
 
         let (min_key, max_key) = SSTable::write_index(&mut index_bufwriter, &index_vec);
-
-        // Build in-memory HashMap from the same data
-        let mut index = HashMap::new();
-        for (key, offset) in &index_vec {
-            index.insert(key.clone(), offset.clone());
-        }
 
         let data_file = data_bufwriter.into_inner().unwrap();
         let index_file = index_bufwriter.into_inner().unwrap();
@@ -56,53 +61,20 @@ impl SSTable {
 
         // After writing, keep file in open mode versus create mode.
         let data_file = File::open(&data_path).unwrap();
+        let data_file = BufReader::new(data_file);
+        let index_file = File::open(&index_path).unwrap();
+        let index_file = BufReader::new(index_file);
 
         SSTable {
             data_path,
             data_file,
             index_path,
-            index,
+            index_file,
+            sparse_index,
             min_key,
             max_key,
+            ss_tables: Vec::new(),
         }
-    }
-
-    pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        if let Some(offset) = self.index.get(key) {
-            return self.read_value_at_offset(*offset);
-        }
-        None  // Key not found in index
-    }
-
-    pub fn get_from_index_file(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        // Fetch index file
-        let index_file = File::open(&self.index_path).unwrap();
-        let mut reader = BufReader::new(index_file);
-
-        loop {
-            // Read key length (4 bytes)
-            let mut key_len_bytes = [0u8; 4];
-            if reader.read_exact(&mut key_len_bytes).is_err() {
-                break;
-            }
-            let key_len = u32::from_be_bytes(key_len_bytes) as usize;
-
-            // Read key
-            let mut stored_key = vec![0u8; key_len];
-            reader.read_exact(&mut stored_key).ok()?;
-
-            // Read offset (8 bytes)
-            let mut offset_bytes = [0u8; 8];
-            reader.read_exact(&mut offset_bytes).ok()?;
-            let offset = u64::from_be_bytes(offset_bytes);
-
-            // Check if this is the key we're looking for
-            if &stored_key == key {
-                // Found it! Now use the offset to read from data file
-                return self.read_value_at_offset(offset);
-            }
-        }
-        None
     }
 
     pub fn data_path (&self) -> &PathBuf {
@@ -119,6 +91,77 @@ impl SSTable {
 
     pub fn max_key (&self) -> &Vec<u8> {
         &self.max_key
+    }
+
+    pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
+        if self.ss_tables.is_empty() {
+            // Binary search the sparse index (O(log n) instead of O(n))
+            let search_result = self.sparse_index.binary_search_by(|(k, _)| {
+                k.as_slice().cmp(key)
+            });
+
+            let start_offset = match search_result {
+                Ok(idx) => {
+                    // Exact match in sparse index
+                    let start = self.sparse_index[idx].1;
+                    start
+                }
+                Err(idx) => {
+                    // Key would be inserted at idx
+                    // So it's between sparse_index[idx-1] and sparse_index[idx]
+                    let start = if idx == 0 {
+                        0
+                    } else {
+                        self.sparse_index[idx - 1].1
+                    };
+                    start
+                }
+            };
+
+            return self.get_from_index_file(key, start_offset);
+        }
+
+        // Parent node: check children with range filtering
+        for child in &mut self.ss_tables {
+            if key >= child.min_key() && key <= child.max_key() {
+                if let Some(value) = child.get(key) {
+                    return Some(value);
+                }
+            }
+        }
+
+        None
+    }
+
+    pub fn get_from_index_file(&mut self, key: &[u8], offset: u64) -> Option<Vec<u8>> {
+        self.index_file.seek(SeekFrom::Start(offset)).unwrap();
+
+        loop {
+            // Read key length (4 bytes)
+            let mut key_len_bytes = [0u8; 4];
+            if self.index_file.read_exact(&mut key_len_bytes).is_err() {
+                break;
+            }
+            let key_len = u32::from_be_bytes(key_len_bytes) as usize;
+
+            // Read key
+            let mut stored_key = vec![0u8; key_len];
+            self.index_file.read_exact(&mut stored_key).ok()?;
+
+            let mut offset_bytes = [0u8; 8];
+            self.index_file.read_exact(&mut offset_bytes).ok()?;
+            let offset = u64::from_be_bytes(offset_bytes);
+
+            if &stored_key == key {
+                // Read offset (8 bytes)
+                return self.read_value_at_offset(offset);
+            }
+
+            if stored_key.as_slice() > key {
+                return None;
+            }
+        }
+        None
     }
 
     fn read_value_at_offset(&mut self, offset: u64) -> Option<Vec<u8>> {

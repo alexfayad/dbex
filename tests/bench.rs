@@ -8,6 +8,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use rand::Rng;
+use sysinfo::System;
+use std::process;
 
 // Cached bench directory - created once per test run, reused by all benchmarks
 static BENCH_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -61,6 +63,48 @@ impl BenchResult {
     }
 }
 
+struct MemoryTracker {
+    system: System,
+    samples: Vec<f64>,
+}
+
+impl MemoryTracker {
+    fn new() -> Self {
+        MemoryTracker {
+            system: System::new(),  // Only allocate the System, don't load all processes
+            samples: Vec::new(),
+        }
+    }
+
+    fn sample(&mut self) {
+        let pid = sysinfo::Pid::from_u32(process::id());
+
+        // Refresh only our specific process
+        self.system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
+
+        if let Some(process) = self.system.process(pid) {
+            let mem_mb = process.memory() as f64 / 1_048_576.0;  // Convert to MB
+            self.samples.push(mem_mb);
+        }
+    }
+
+    fn peak_mb(&self) -> f64 {
+        self.samples.iter().copied().fold(0.0, f64::max)
+    }
+
+    fn avg_mb(&self) -> f64 {
+        if self.samples.is_empty() {
+            0.0
+        } else {
+            self.samples.iter().sum::<f64>() / self.samples.len() as f64
+        }
+    }
+
+    fn samples(&self) -> Vec<f64> {
+        self.samples.clone()
+    }
+}
+
 fn zipfian_key(rng: &mut impl Rng, n: usize) -> usize {
     // Simple approximation: 80% of accesses hit 20% of keys
     if rng.random_bool(0.8) {
@@ -100,8 +144,8 @@ fn bench_random_reads(db: &mut DBex, num_reads: usize, key_space: usize, value_s
 
     let start = Instant::now();
     for _ in 0..num_reads {
-        let i = rng.random_range(0..key_space);
-        let key = i.to_be_bytes();
+        let idx = rng.random_range(0..key_space);
+        let key = idx.to_be_bytes();
         let _ = db.find(&key);
     }
     let total_time = start.elapsed();
@@ -145,8 +189,8 @@ fn bench_zipfian_reads(db: &mut DBex, num_reads: usize, key_space: usize, value_
 
     let start = Instant::now();
     for _ in 0..num_reads {
-        let i = zipfian_key(&mut rng, key_space);
-        let key = i.to_be_bytes();
+        let idx = zipfian_key(&mut rng, key_space);
+        let key = idx.to_be_bytes();
         let _ = db.find(&key);
     }
     let total_time = start.elapsed();
@@ -187,7 +231,7 @@ fn run_benchmark(name: &str, num_keys: usize, value_size: usize, num_reads: usiz
     let random_read_result = bench_random_reads(db, num_reads, num_keys, value_size);
     let zipfian_result = bench_zipfian_reads(db, num_reads, num_keys, value_size);
 
-    let total_ss_tables = &format!("Total SSTables: {}", db.ss_tables().len());
+    let total_ss_tables = &format!("Total SSTables: {}", db.num_of_ss_tables());
 
     write_result.print();
     seq_read_result.print();
@@ -269,4 +313,130 @@ fn bench_large_heavy_reads_and_writes() {
 #[test]
 fn bench_huge() {
     run_benchmark("huge", 10_000_000, 1_000, 10_000);
+}
+
+// Dedicated memory stress test with full tracking
+#[test]
+fn bench_memory_stress() {
+    let bench_dir = get_bench_dir();
+    let mut test_db = TestDb::new();
+    let db = test_db.db();
+
+    let num_keys = 5_000_000;
+    let value_size = 2_000;  // 2KB values
+    let num_reads = 50_000;
+
+    println!("\n{}", "=".repeat(60));
+    println!("Memory Stress Test");
+    println!("Keys: {}, Value size: {} bytes, Total data: {:.1} MB",
+             num_keys, value_size, (num_keys * (8 + value_size)) as f64 / 1_000_000.0);
+    println!("{}\n", "=".repeat(60));
+
+    let mut mem_tracker = MemoryTracker::new();
+    let value = vec![0xABu8; value_size];
+
+    // Phase 1: Write with memory tracking
+    println!("Phase 1: Writing {} keys with memory tracking...", num_keys);
+    mem_tracker.sample();
+    let write_start = Instant::now();
+
+    for i in 0..num_keys {
+        let key = i.to_be_bytes().to_vec();
+        db.insert(key, value.clone());
+
+        if i % 50000 == 0 {
+            mem_tracker.sample();
+        }
+    }
+    db.flush();
+    mem_tracker.sample();
+    let write_time = write_start.elapsed();
+
+    let write_samples = mem_tracker.samples();
+    let write_peak = mem_tracker.peak_mb();
+    let write_avg = mem_tracker.avg_mb();
+
+    println!("Write complete: {:.2?} ({:.0} ops/sec, mem: {:.1}/{:.1} MB)",
+             write_time,
+             num_keys as f64 / write_time.as_secs_f64(),
+             write_avg,
+             write_peak);
+    println!("Total SSTables: {}\n", db.num_of_ss_tables());
+
+    // Phase 2: Random reads with memory tracking
+    println!("Phase 2: Random reads with memory tracking...");
+    mem_tracker = MemoryTracker::new();
+    mem_tracker.sample();
+
+    let mut rng = rand::rng();
+    let read_start = Instant::now();
+
+    for i in 0..num_reads {
+        let idx = rng.random_range(0..num_keys);
+        let key = idx.to_be_bytes();
+        let _ = db.find(&key);
+
+        if i % 5000 == 0 {
+            mem_tracker.sample();
+        }
+    }
+    let read_time = read_start.elapsed();
+
+    let read_samples = mem_tracker.samples();
+    let read_peak = mem_tracker.peak_mb();
+    let read_avg = mem_tracker.avg_mb();
+
+    println!("Reads complete: {:.2?} ({:.0} ops/sec, mem: {:.1}/{:.1} MB)\n",
+             read_time,
+             num_reads as f64 / read_time.as_secs_f64(),
+             read_avg,
+             read_peak);
+
+    // Export detailed memory CSV
+    let mut csv_data = String::new();
+    csv_data.push_str("phase,sample_num,memory_mb\n");
+
+    for (i, &mem) in write_samples.iter().enumerate() {
+        csv_data.push_str(&format!("write,{},{}\n", i, mem));
+    }
+    for (i, &mem) in read_samples.iter().enumerate() {
+        csv_data.push_str(&format!("read,{},{}\n", i, mem));
+    }
+
+    let csv_file = bench_dir.join("memory_stress.csv");
+    fs::write(&csv_file, &csv_data).ok();
+
+    // Summary
+    let summary = format!(
+        "=== Memory Stress Test Summary ===\n\
+         Write Phase:\n\
+           Time: {:.2?}\n\
+           Throughput: {:.0} ops/sec\n\
+           Memory: avg={:.1} MB, peak={:.1} MB\n\
+           SSTables created: {}\n\
+         \n\
+         Read Phase:\n\
+           Time: {:.2?}\n\
+           Throughput: {:.0} ops/sec\n\
+           Memory: avg={:.1} MB, peak={:.1} MB\n\
+         \n\
+         CSV saved to: {}\n",
+        write_time,
+        num_keys as f64 / write_time.as_secs_f64(),
+        write_avg,
+        write_peak,
+        db.num_of_ss_tables(),
+        read_time,
+        num_reads as f64 / read_time.as_secs_f64(),
+        read_avg,
+        read_peak,
+        csv_file.display()
+    );
+
+    println!("{}", summary);
+
+    let summary_file = bench_dir.join("memory_stress.txt");
+    fs::write(&summary_file, summary).ok();
+
+    db.purge();
 }

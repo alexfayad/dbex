@@ -2,6 +2,7 @@ mod memtable;
 mod ss_table;
 
 use std::fs;
+use std::mem::take;
 // src/lib.rs
 use crate::memtable::MemTable;
 use crate::ss_table::SSTable;
@@ -9,7 +10,8 @@ use crate::ss_table::SSTable;
 pub struct DBex {
     memtable: MemTable,
     immutable_memtable: Option<MemTable>,
-    ss_tables: Vec<SSTable>,
+    pre_compact_ss_tables: Vec<SSTable>, // these have overlap in the keys
+    compacted_ss_tables: Vec<SSTable>, // no overlap in the keys
     record_count: usize,
 }
 
@@ -18,7 +20,8 @@ impl DBex {
         DBex {
             memtable: MemTable::new(),
             immutable_memtable: None,
-            ss_tables: Vec::new(),
+            pre_compact_ss_tables: Vec::new(),
+            compacted_ss_tables: Vec::new(),
             record_count: 0,
         }
     }
@@ -54,8 +57,20 @@ impl DBex {
             }
         }
 
-        // 3. Check SSTables (newest to oldest)
-        for ss_table in &mut self.ss_tables {
+        // 3. Check Pre Compacted SSTables (newest to oldest)
+        for ss_table in &mut self.pre_compact_ss_tables {
+            let min_key = ss_table.min_key();
+            let max_key = ss_table.max_key();
+
+            if key >= min_key && key <= max_key {
+                if let Some(value) = ss_table.get(key) {
+                    return Some(value);
+                }
+            }
+        }
+
+        // 4. Check Compacted SSTables (Traverse the tree structure)
+        for ss_table in &mut self.compacted_ss_tables {
             let min_key = ss_table.min_key();
             let max_key = ss_table.max_key();
 
@@ -76,20 +91,25 @@ impl DBex {
         // Flush the immutable one
         if let Some(ref table) = self.immutable_memtable {
             let ss_table = SSTable::new(&table);
-            self.ss_tables.push(ss_table);
+            self.pre_compact_ss_tables.push(ss_table);
         }
 
         // Clear it after flush
         self.immutable_memtable = None;
+
+        // Check if pre_compact_ss_tables is too big now
+        if self.pre_compact_ss_tables.len() > 10 {
+            self.compact()
+        }
     }
 
     // Delete all SSTables associated with the DB
     pub fn purge(&mut self) {
-        for ss_table in &mut self.ss_tables {
+        for ss_table in &mut self.pre_compact_ss_tables {
             fs::remove_file(ss_table.data_path()).ok();
             fs::remove_file(ss_table.index_path()).ok();
         }
-        self.ss_tables.clear();
+        self.pre_compact_ss_tables.clear();
         self.record_count = 0;
     }
 
@@ -103,7 +123,18 @@ impl DBex {
         unimplemented!("This function is not yet implemented.")
     }
 
-    pub fn ss_tables(&self) -> &Vec<SSTable> {
-        &self.ss_tables
+    pub fn num_of_ss_tables(&self) -> usize {
+        self.pre_compact_ss_tables.len() + self.compacted_ss_tables.len()
+    }
+
+    fn compact(&mut self) {
+        // Take ownership of pre_compact tables (leaves empty Vec behind)
+        let tables_to_compact = take(&mut self.pre_compact_ss_tables);
+
+        self.compacted_ss_tables.extend(tables_to_compact);
+
+        // Question now is how do I compact the tables...
+        // We need to recursively compact each ss_table if it's children ss_tables become > 10
+
     }
 }
