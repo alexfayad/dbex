@@ -25,7 +25,7 @@ impl MemTable {
     pub fn get(&self, key: &[u8]) -> Option<&Vec<u8>> {
         match self.data.get(key)? {
             Some(value) => Some(value),
-            None => None,  // Tombstone means "deleted"
+            None => None,
         }
     }
 

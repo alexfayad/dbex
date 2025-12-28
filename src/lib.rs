@@ -1,18 +1,25 @@
 mod memtable;
 mod ss_table;
+mod write_ahead_log;
+mod utils;
 
 use std::fs;
 use std::mem::take;
 // src/lib.rs
 use crate::memtable::MemTable;
 use crate::ss_table::SSTable;
+use crate::utils::Operation::{Delete, Insert};
+use crate::write_ahead_log::WriteAheadLog;
 
 pub struct DBex {
     memtable: MemTable,
     immutable_memtable: Option<MemTable>,
     pre_compact_ss_tables: Vec<SSTable>, // these have overlap in the keys
     compacted_ss_tables: Vec<SSTable>, // no overlap in the keys
-    record_count: usize,
+    write_ahead_log: WriteAheadLog,
+    is_in_txn: bool,
+    record_count: u64,
+    lsn: u64,
 }
 
 impl DBex {
@@ -22,7 +29,10 @@ impl DBex {
             immutable_memtable: None,
             pre_compact_ss_tables: Vec::new(),
             compacted_ss_tables: Vec::new(),
+            write_ahead_log: WriteAheadLog::new(),
+            is_in_txn: false,
             record_count: 0,
+            lsn: 0,
         }
     }
 
@@ -32,8 +42,7 @@ impl DBex {
 
     pub fn insert(&mut self, key: Vec<u8>, value: Vec<u8>) {
 
-        let key = key.clone();
-        let value = value.clone();
+        self.write_ahead_log.write(Insert, self.lsn.clone(), Some(key.clone()), Some(value.clone()));
 
         self.memtable.insert(key, value);
 
@@ -42,9 +51,21 @@ impl DBex {
         }
 
         self.record_count += 1;
+        self.lsn += 1;
     }
 
-    pub fn find(&mut self, key: &[u8]) -> Option<Vec<u8>> {
+    pub fn remove(&mut self, key: &Vec<u8>) {
+        let key = key.to_vec();
+
+        self.write_ahead_log.write(Delete, self.lsn.clone(), Some(key.clone()), None);
+
+        self.memtable.remove(&key);
+
+        self.record_count -= 1;
+        self.lsn += 1;
+    }
+
+    pub fn find(&mut self, key: &Vec<u8>) -> Option<Vec<u8>> {
         // 1. Check active MemTable (RAM)
         if let Some(value) = self.memtable.get(key) {
             return Some(value.clone());
@@ -114,13 +135,14 @@ impl DBex {
     }
 
     pub fn start_txn(&mut self) {
-        unimplemented!("This function is not yet implemented.")
+        self.is_in_txn = true;
     }
 
     pub fn commit_txn(&mut self) {
         // Write to WAL or some shit
         // then flush or some shit
-        unimplemented!("This function is not yet implemented.")
+        self.flush();
+        self.is_in_txn = false;
     }
 
     pub fn num_of_ss_tables(&self) -> usize {
@@ -128,7 +150,7 @@ impl DBex {
     }
 
     fn compact(&mut self) {
-        // Take ownership of pre_compact tables (leaves empty Vec behind)
+        // take() Takes ownership of pre_compact tables (leaves empty Vec behind)
         let tables_to_compact = take(&mut self.pre_compact_ss_tables);
 
         self.compacted_ss_tables.extend(tables_to_compact);

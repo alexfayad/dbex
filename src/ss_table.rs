@@ -47,7 +47,7 @@ impl SSTable {
             }
 
             let key_len = key.len() as u32;
-            let entry_size = 4 + key_len as u64 + 8;  // key_len + key + offset
+            let entry_size = 4 + key_len as u64 + 8;
             sparse_offset += entry_size;
         }
 
@@ -93,7 +93,7 @@ impl SSTable {
         &self.max_key
     }
 
-    pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
+    pub fn get(&mut self, key: &Vec<u8>) -> Option<Vec<u8>> {
         if self.ss_tables.is_empty() {
             // Binary search the sparse index (O(log n) instead of O(n))
             let search_result = self.sparse_index.binary_search_by(|(k, _)| {
