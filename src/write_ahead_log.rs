@@ -1,9 +1,9 @@
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
-use rkyv::{deserialize, rancor::Error, Archive, Deserialize, Serialize};
+use rkyv::{Archive, Deserialize, Serialize};
+use rkyv::rancor::{Error};
 use rkyv::util::AlignedVec;
-use rkyv::rancor::Strategy;
 use crate::utils::Operation;
 
 pub struct WriteAheadLog {
@@ -15,6 +15,7 @@ pub struct WriteAheadLog {
 impl WriteAheadLog {
     pub fn new() -> Self {
 
+        std::fs::create_dir_all("wals").unwrap();
         let cur_wal_path = PathBuf::from("wals/cur.wal");
 
         let wal_file: File;
@@ -69,13 +70,11 @@ impl WriteAheadLog {
 
             // Read wal_entry
             let mut encoded_wal_entry_bytes = vec![0u8; data_len];
-            wal_reader.read_exact(&mut encoded_wal_entry_bytes).ok();
-            let mut archived_wal_entry =
-                rkyv::access::<ArchivedWalEntry, Error>(&encoded_wal_entry_bytes[..]).unwrap();
-
-            let wal_entry: WalEntry = deserialize::<WalEntry, Error>(
-                Strategy::wrap(&mut archived_wal_entry)
-            ).unwrap();
+            if wal_reader.read_exact(&mut encoded_wal_entry_bytes).is_err() {
+                break;
+            }
+            let archived = rkyv::access::<ArchivedWalEntry, Error>(&encoded_wal_entry_bytes).unwrap();
+            let wal_entry: WalEntry = rkyv::deserialize::<WalEntry, Error>(archived).unwrap();
 
             wal_entries.push(wal_entry);
         }
@@ -84,9 +83,7 @@ impl WriteAheadLog {
     }
 }
 
-#[derive(Archive, Deserialize, Serialize, Debug, PartialEq)]
-#[rkyv(compare(PartialEq), derive(Debug))]
-pub struct WalEntry {
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq)]pub struct WalEntry {
     lsn: u64,
     operation: Operation,
     key: Option<Vec<u8>>,

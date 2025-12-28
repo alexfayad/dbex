@@ -1,7 +1,8 @@
-mod memtable;
-mod ss_table;
-mod write_ahead_log;
-mod utils;
+pub mod memtable;
+pub mod ss_table;
+pub mod write_ahead_log;
+pub mod utils;
+
 
 use std::fs;
 use std::mem::take;
