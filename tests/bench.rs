@@ -145,7 +145,7 @@ fn bench_random_reads(db: &mut DBex, num_reads: usize, key_space: usize, value_s
     let start = Instant::now();
     for _ in 0..num_reads {
         let idx = rng.random_range(0..key_space);
-        let key = idx.to_be_bytes();
+        let key = idx.to_be_bytes().to_vec();
         let _ = db.find(&key);
     }
     let total_time = start.elapsed();
@@ -166,7 +166,7 @@ fn bench_random_reads(db: &mut DBex, num_reads: usize, key_space: usize, value_s
 fn bench_sequential_reads(db: &mut DBex, num_reads: usize, value_size: usize) -> BenchResult {
     let start = Instant::now();
     for i in 0..num_reads {
-        let key = i.to_be_bytes();
+        let key = i.to_be_bytes().to_vec();
         let _ = db.find(&key);
     }
     let total_time = start.elapsed();
@@ -190,7 +190,7 @@ fn bench_zipfian_reads(db: &mut DBex, num_reads: usize, key_space: usize, value_
     let start = Instant::now();
     for _ in 0..num_reads {
         let idx = zipfian_key(&mut rng, key_space);
-        let key = idx.to_be_bytes();
+        let key = idx.to_be_bytes().to_vec();
         let _ = db.find(&key);
     }
     let total_time = start.elapsed();
@@ -373,7 +373,7 @@ fn bench_memory_stress() {
 
     for i in 0..num_reads {
         let idx = rng.random_range(0..num_keys);
-        let key = idx.to_be_bytes();
+        let key = idx.to_be_bytes().to_vec();
         let _ = db.find(&key);
 
         if i % 5000 == 0 {

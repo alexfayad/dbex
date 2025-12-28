@@ -9,8 +9,8 @@ fn test_basic_insert_and_find() {
     db.insert(b"key1".to_vec(), b"value1".to_vec());
     db.insert(b"key2".to_vec(), b"value2".to_vec());
 
-    assert_eq!(db.find(b"key1"), Some(b"value1".to_vec()));
-    assert_eq!(db.find(b"key2"), Some(b"value2".to_vec()));
+    assert_eq!(db.find(&b"key1".to_vec()), Some(b"value1".to_vec()));
+    assert_eq!(db.find(&b"key2".to_vec()), Some(b"value2".to_vec()));
 }
 
 #[test]
@@ -20,7 +20,7 @@ fn test_find_nonexistent_key() {
 
     db.insert(b"existing".to_vec(), b"value".to_vec());
 
-    assert_eq!(db.find(b"nonexistent"), None);
+    assert_eq!(db.find(&b"nonexistent".to_vec()), None);
 }
 
 #[test]
@@ -29,7 +29,7 @@ fn test_empty_database() {
     let db = test_db.db();
 
     assert_eq!(db.memtable().len(), 0);
-    assert_eq!(db.find(b"any_key"), None);
+    assert_eq!(db.find(&b"any_key".to_vec()), None);
 }
 
 #[test]
@@ -41,7 +41,7 @@ fn test_overwrite_key() {
     db.insert(b"key".to_vec(), b"new_value".to_vec());
 
     // Since append-only, latest value should be returned
-    assert_eq!(db.find(b"key"), Some(b"new_value".to_vec()));
+    assert_eq!(db.find(&b"key".to_vec()), Some(b"new_value".to_vec()));
 }
 
 #[test]
@@ -52,7 +52,7 @@ fn test_large_values() {
     let large_value = vec![42u8; 1024 * 1024]; // 1MB value
     db.insert(b"large".to_vec(), large_value.clone());
 
-    assert_eq!(db.find(b"large"), Some(large_value));
+    assert_eq!(db.find(&b"large".to_vec()), Some(large_value));
 }
 
 #[test]
@@ -63,8 +63,8 @@ fn test_empty_key_and_value() {
     db.insert(b"".to_vec(), b"empty_key".to_vec());
     db.insert(b"empty_value".to_vec(), b"".to_vec());
 
-    assert_eq!(db.find(b""), Some(b"empty_key".to_vec()));
-    assert_eq!(db.find(b"empty_value"), Some(b"".to_vec()));
+    assert_eq!(db.find(&b"".to_vec()), Some(b"empty_key".to_vec()));
+    assert_eq!(db.find(&b"empty_value".to_vec()), Some(b"".to_vec()));
 }
 
 #[test]
@@ -76,7 +76,7 @@ fn test_binary_data() {
     let binary_value = b"\xDE\xAD\xBE\xEF";
 
     db.insert(binary_key.to_vec(), binary_value.to_vec());
-    assert_eq!(db.find(binary_key), Some(binary_value.to_vec()));
+    assert_eq!(db.find(&binary_key.to_vec()), Some(binary_value.to_vec()));
 }
 
 #[test]
@@ -110,7 +110,7 @@ fn test_flush() {
 
     // After flush, data should be in an SSTable
     // Verify we can still read it
-    assert_eq!(db.find(b"key"), Some(b"value".to_vec()));
+    assert_eq!(db.find(&b"key".to_vec()), Some(b"value".to_vec()));
 }
 
 #[test]
@@ -128,9 +128,9 @@ fn test_many_small_keys() {
     assert_eq!(db.memtable().len(), count);
 
     // Verify some random entries
-    assert_eq!(db.find(b"key_0"), Some(b"value_0".to_vec()));
-    assert_eq!(db.find(b"key_5000"), Some(b"value_5000".to_vec()));
-    assert_eq!(db.find(b"key_9999"), Some(b"value_9999".to_vec()));
+    assert_eq!(db.find(&b"key_0".to_vec()), Some(b"value_0".to_vec()));
+    assert_eq!(db.find(&b"key_5000".to_vec()), Some(b"value_5000".to_vec()));
+    assert_eq!(db.find(&b"key_9999".to_vec()), Some(b"value_9999".to_vec()));
 }
 
 #[test]
@@ -144,15 +144,15 @@ fn test_memtable_flush_to_sstable() {
     db.insert(b"key3".to_vec(), b"value3".to_vec());
 
     // Data should be in MemTable
-    assert_eq!(db.find(b"key1"), Some(b"value1".to_vec()));
+    assert_eq!(db.find(&b"key1".to_vec()), Some(b"value1".to_vec()));
 
     // Flush to SSTable
     db.flush();
 
     // Data should still be readable from SSTable
-    assert_eq!(db.find(b"key1"), Some(b"value1".to_vec()));
-    assert_eq!(db.find(b"key2"), Some(b"value2".to_vec()));
-    assert_eq!(db.find(b"key3"), Some(b"value3".to_vec()));
+    assert_eq!(db.find(&b"key1".to_vec()), Some(b"value1".to_vec()));
+    assert_eq!(db.find(&b"key2".to_vec()), Some(b"value2".to_vec()));
+    assert_eq!(db.find(&b"key3".to_vec()), Some(b"value3".to_vec()));
 }
 
 #[test]
@@ -171,8 +171,8 @@ fn test_read_from_multiple_sstables() {
     db.flush();
 
     // Should be able to read from both SSTables
-    assert_eq!(db.find(b"batch1_key1"), Some(b"batch1_value1".to_vec()));
-    assert_eq!(db.find(b"batch2_key1"), Some(b"batch2_value1".to_vec()));
+    assert_eq!(db.find(&b"batch1_key1".to_vec()), Some(b"batch1_value1".to_vec()));
+    assert_eq!(db.find(&b"batch2_key1".to_vec()), Some(b"batch2_value1".to_vec()));
 }
 
 #[test]
@@ -188,5 +188,5 @@ fn test_newest_value_wins() {
     db.insert(b"key".to_vec(), b"new_value".to_vec());
 
     // Should return newest value from MemTable, not SSTable
-    assert_eq!(db.find(b"key"), Some(b"new_value".to_vec()));
+    assert_eq!(db.find(&b"key".to_vec()), Some(b"new_value".to_vec()));
 }
