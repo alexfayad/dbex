@@ -1,7 +1,3 @@
-**Documentation**: This README was written by [Claude](https://claude.ai), an AI assistant by Anthropic. This README is kept updated as contributions to the project are made.
-
----
-
 # dbex - A High-Performance Key-Value Database
 
 An LSM-tree based key-value storage engine built in Rust, focusing on database internals and I/O optimizations. This project explores storage engine architecture, write amplification, and the tradeoffs between RAM and SSD performance.
@@ -298,3 +294,7 @@ Uses `sysinfo` crate to measure memory usage during benchmarks.
 - WAL files are stored in `wals/` directory
 - Focus is on understanding I/O optimization between RAM and SSD
 - Code prioritizes clarity and educational value over production-readiness
+
+---
+
+**Documentation**: This README was written by [Claude](https://claude.ai), an AI assistant by Anthropic. This README is kept updated as contributions to the project are made.
