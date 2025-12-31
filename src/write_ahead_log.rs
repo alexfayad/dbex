@@ -1,4 +1,4 @@
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use rkyv::{Archive, Deserialize, Serialize};
@@ -9,27 +9,23 @@ use crate::utils::Operation;
 pub struct WriteAheadLog {
     cur_wal_path: PathBuf,
     cur_wal_file_writer: BufWriter<File>,
-    prev_fal_files: Vec<PathBuf>
+    prev_wal_files: Vec<PathBuf>
 }
 
 impl WriteAheadLog {
     pub fn new() -> Self {
+        let cur_wal_path = PathBuf::from("db_data/wals/cur.wal");
 
-        std::fs::create_dir_all("wals").unwrap();
-        let cur_wal_path = PathBuf::from("wals/cur.wal");
-
-        let wal_file: File;
-
-        if cur_wal_path.exists() {
-            wal_file = File::open(&cur_wal_path).unwrap();
-        } else {
-            wal_file = File::create(&cur_wal_path).unwrap();
-        }
+        let wal_file: File = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&cur_wal_path)
+            .unwrap();
 
         WriteAheadLog{
             cur_wal_path,
             cur_wal_file_writer: BufWriter::new(wal_file),
-            prev_fal_files: Vec::new()
+            prev_wal_files: Vec::new()
         }
     }
 

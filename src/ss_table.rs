@@ -1,6 +1,5 @@
-use std::cmp::Ordering;
 use std::fs::File;
-use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::time::{ SystemTime, UNIX_EPOCH };
 use crate::memtable::MemTable;
@@ -8,9 +7,11 @@ use crate::memtable::MemTable;
 #[derive(Debug)]
 pub struct SSTable {
     data_path: PathBuf,
-    data_file: File,
+    data_writer: BufWriter<File>,
+    data_reader: BufReader<File>,
     index_path: PathBuf,
-    index_file: File,
+    index_writer: BufWriter<File>,
+    index_reader: BufReader<File>,
     sparse_index: Vec<(Vec<u8>, u64)>,
     min_key: Vec<u8>,
     max_key: Vec<u8>,
@@ -23,17 +24,28 @@ impl SSTable {
             .unwrap()
             .as_nanos();
 
-        let data_path = PathBuf::from(format!("ss_table_{}.db", timestamp));
-        let index_path = PathBuf::from(format!("ss_table_{}.db.index", timestamp));
+        let data_path = PathBuf::from(format!("db_data/ss_tables/ss_table_{}.db", timestamp));
+        let index_path = PathBuf::from(format!("db_data/ss_tables/ss_table_{}.db.index", timestamp));
 
-        let data_file = File::create(&data_path).unwrap();
-        let index_file = File::create(&index_path).unwrap();
+        let data_write_file = File::create(&data_path).unwrap();
+        let index_write_file = File::create(&index_path).unwrap();
+
+        let data_writer = BufWriter::new(data_write_file);
+        let index_writer = BufWriter::new(index_write_file);
+
+        let data_read_file = File::open(&data_path).unwrap();
+        let index_read_file = File::open(&index_path).unwrap();
+
+        let data_reader = BufReader::new(data_read_file);
+        let index_reader = BufReader::new(index_read_file);
 
         SSTable {
             data_path,
-            data_file,
+            data_writer,
+            data_reader,
             index_path,
-            index_file,
+            index_writer,
+            index_reader,
             sparse_index: Vec::new(),
             min_key: Vec::new(),
             max_key: Vec::new(),
@@ -64,12 +76,14 @@ impl SSTable {
         let (min_key, max_key) = self.write_index(&index_vec);
         self.min_key = min_key;
         self.max_key = max_key;
+        
+        self.sparse_index = sparse_index;
 
-        let data_file = self.get_data_bufwriter().into_inner().unwrap();
-        let index_file = self.get_index_bufwriter().into_inner().unwrap();
+        self.data_writer.flush().unwrap();
+        self.index_writer.flush().unwrap();
 
-        data_file.sync_all().unwrap();
-        index_file.sync_all().unwrap();
+        self.data_writer.get_ref().sync_all().unwrap();
+        self.index_writer.get_ref().sync_data().unwrap();
     }
 
     pub fn data_path (&self) -> &PathBuf {
@@ -80,12 +94,8 @@ impl SSTable {
         &self.index_path
     }
 
-    pub fn data_file (&self) -> &File {
-        &self.data_file
-    }
-
-    pub fn index_file (&self) -> &File {
-        &self.index_file
+    pub fn index_reader_mut(&mut self) -> &mut BufReader<File> {
+        &mut self.index_reader
     }
 
     pub fn min_key (&self) -> &Vec<u8> {
@@ -94,14 +104,6 @@ impl SSTable {
 
     pub fn max_key (&self) -> &Vec<u8> {
         &self.max_key
-    }
-
-    pub fn get_data_bufwriter (&self) -> BufWriter<File> {
-        BufWriter::new(self.data_file.try_clone().unwrap())
-    }
-
-    pub fn get_index_bufwriter (&self) -> BufWriter<File> {
-        BufWriter::new(self.index_file.try_clone().unwrap())
     }
 
     pub fn get(&mut self, key: &Vec<u8>) -> Option<Vec<u8>> {
@@ -132,7 +134,7 @@ impl SSTable {
     }
 
     pub fn get_from_index_file(&mut self, key: &[u8], offset: u64) -> Option<Vec<u8>> {
-        self.index_file.seek(SeekFrom::Start(offset)).unwrap();
+        self.index_reader.seek(SeekFrom::Start(offset)).unwrap();
         loop {
             let maybe_next_key = self.get_next_key_in_index_file();
 
@@ -156,17 +158,17 @@ impl SSTable {
     pub fn get_next_key_in_index_file(&mut self) -> Option<(Vec<u8>, u64)> {
         // Read key length (4 bytes)
         let mut key_len_bytes = [0u8; 4];
-        if self.index_file.read_exact(&mut key_len_bytes).is_err() {
+        if self.index_reader.read_exact(&mut key_len_bytes).is_err() {
             return None;
         }
         let key_len = u32::from_be_bytes(key_len_bytes) as usize;
 
         // Read key
         let mut stored_key = vec![0u8; key_len];
-        self.index_file.read_exact(&mut stored_key).ok()?;
+        self.index_reader.read_exact(&mut stored_key).ok()?;
 
         let mut offset_bytes = [0u8; 8];
-        self.index_file.read_exact(&mut offset_bytes).ok()?;
+        self.index_reader.read_exact(&mut offset_bytes).ok()?;
         let offset = u64::from_be_bytes(offset_bytes);
 
         Some((stored_key, offset))
@@ -174,11 +176,11 @@ impl SSTable {
 
     pub fn read_value_at_offset(&mut self, offset: u64) -> Option<Vec<u8>> {
 
-        self.data_file.seek(SeekFrom::Start(offset)).unwrap();
+        self.data_reader.seek(SeekFrom::Start(offset)).unwrap();
 
         // Read value length
         let mut len_bytes = [0u8; 4];
-        self.data_file.read_exact(&mut len_bytes).unwrap();
+        self.data_reader.read_exact(&mut len_bytes).unwrap();
         let value_len = u32::from_be_bytes(len_bytes) as usize;
 
         if value_len == 0xFFFFFFFF {
@@ -187,7 +189,7 @@ impl SSTable {
 
         // Read value
         let mut value = vec![0u8; value_len];
-        self.data_file.read_exact(&mut value).ok()?;
+        self.data_reader.read_exact(&mut value).ok()?;
 
         Some(value)
     }
@@ -198,13 +200,13 @@ impl SSTable {
             let value_len = value.len() as u32;
 
             // [value_length][value]
-            self.get_data_bufwriter().write_all(&value_len.to_be_bytes()).unwrap();
-            self.get_data_bufwriter().write_all(&value).unwrap();
+            self.data_writer.write_all(&value_len.to_be_bytes()).unwrap();
+            self.data_writer.write_all(&value).unwrap();
 
             4 + value.len() as u64
         } else {
             let tombstone_marker = 0xFFFFFFFF_u32;
-            self.get_data_bufwriter().write_all(&tombstone_marker.to_be_bytes()).unwrap();
+            self.data_writer.write_all(&tombstone_marker.to_be_bytes()).unwrap();
             4
         }
     }
@@ -215,31 +217,10 @@ impl SSTable {
         let max_key = index.last().unwrap().0.clone();
         for (key, offset) in index.into_iter() {
             let key_len = key.len() as u32;
-            self.get_index_bufwriter().write_all(&key_len.to_be_bytes()).unwrap();  // 4 bytes
-            self.get_index_bufwriter().write_all(&key).unwrap();
-            self.get_index_bufwriter().write_all(&offset.to_be_bytes()).unwrap();  // 8 bytes
+            self.index_writer.write_all(&key_len.to_be_bytes()).unwrap();  // 4 bytes
+            self.index_writer.write_all(&key).unwrap();
+            self.index_writer.write_all(&offset.to_be_bytes()).unwrap();  // 8 bytes
         }
         (min_key, max_key)
-    }
-}
-
-impl Eq for SSTable {}
-
-impl PartialEq for SSTable {
-    fn eq(&self, other: &Self) -> bool {
-        self.data_path == other.data_path
-    }
-}
-
-impl PartialOrd for SSTable {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for SSTable {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // Example: Sort by age descending
-        other.data_path.cmp(&self.data_path)
     }
 }

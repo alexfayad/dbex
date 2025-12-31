@@ -231,13 +231,18 @@ fn run_benchmark(name: &str, num_keys: usize, value_size: usize, num_reads: usiz
     let random_read_result = bench_random_reads(db, num_reads, num_keys, value_size);
     let zipfian_result = bench_zipfian_reads(db, num_reads, num_keys, value_size);
 
-    let total_ss_tables = &format!("Total SSTables: {}", db.num_of_ss_tables());
+    let l0_ss_tables = &format!("L0 SSTables: {}", db.cnt_of_l0_ss_tables());
+    let l1_ss_tables = &format!("L1 SSTables: {}", db.cnt_of_l1_ss_tables());
+    let l2_ss_tables = &format!("L2 SSTables: {}", db.cnt_of_l2_ss_tables());
+
 
     write_result.print();
     seq_read_result.print();
     random_read_result.print();
     zipfian_result.print();
-    println!("{}", total_ss_tables);
+    println!("{}", l0_ss_tables);
+    println!("{}", l1_ss_tables);
+    println!("{}", l2_ss_tables);
 
     // Append results to output
     output.push_str(&format_result(&write_result));
@@ -245,7 +250,9 @@ fn run_benchmark(name: &str, num_keys: usize, value_size: usize, num_reads: usiz
     output.push_str(&format_result(&random_read_result));
     output.push_str(&format_result(&zipfian_result));
     output.push_str("\n");
-    output.push_str(total_ss_tables);
+    output.push_str(l0_ss_tables);
+    output.push_str(l1_ss_tables);
+    output.push_str(l2_ss_tables);
 
     // Save results to file
     let results_file = bench_dir.join(format!("{}.txt", name));
@@ -361,7 +368,9 @@ fn bench_memory_stress() {
              num_keys as f64 / write_time.as_secs_f64(),
              write_avg,
              write_peak);
-    println!("Total SSTables: {}\n", db.num_of_ss_tables());
+    println!("L0 SSTables: {}\n", db.cnt_of_l0_ss_tables());
+    println!("L1 SSTables: {}\n", db.cnt_of_l1_ss_tables());
+    println!("L2 SSTables: {}\n", db.cnt_of_l2_ss_tables());
 
     // Phase 2: Random reads with memory tracking
     println!("Phase 2: Random reads with memory tracking...");
@@ -413,7 +422,9 @@ fn bench_memory_stress() {
            Time: {:.2?}\n\
            Throughput: {:.0} ops/sec\n\
            Memory: avg={:.1} MB, peak={:.1} MB\n\
-           SSTables created: {}\n\
+           L0 SSTables created: {}\n\
+           L1 SSTables created: {}\n\
+           L2 SSTables created: {}\n\
          \n\
          Read Phase:\n\
            Time: {:.2?}\n\
@@ -425,7 +436,9 @@ fn bench_memory_stress() {
         num_keys as f64 / write_time.as_secs_f64(),
         write_avg,
         write_peak,
-        db.num_of_ss_tables(),
+        db.cnt_of_l0_ss_tables(),
+        db.cnt_of_l1_ss_tables(),
+        db.cnt_of_l2_ss_tables(),
         read_time,
         num_reads as f64 / read_time.as_secs_f64(),
         read_avg,
