@@ -16,7 +16,7 @@ An LSM-tree based key-value storage engine built in Rust. Leverages Rust's zero-
 
 ### Storage Layers
 
-**MemTable (L0 - In-Memory)**
+**MemTable (In-Memory)**
 - Active MemTable holds most recent operations as a BTreeMap
 - Maintains sorted structure for efficient SSTable creation
 - When reaching 64MB threshold, becomes immutable and a new MemTable is created
