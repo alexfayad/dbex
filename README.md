@@ -14,30 +14,51 @@ An LSM-tree based key-value storage engine built in Rust. Leverages Rust's zero-
 
 ## Architecture
 
-In-memory table (MemTable) holds most recent operations until it reaches a certain size. This is stored as a BTreeMap which maintains a sorted structure required by our application when flushing to an SSTable.
+### Storage Layers
 
-When the MemTable reaches 64MB in size, we clone the _active_ MemTable and mark it as immutable, then create a new MemTable to keep handling incoming writes.
+**MemTable (L0 - In-Memory)**
+- Active MemTable holds most recent operations as a BTreeMap
+- Maintains sorted structure for efficient SSTable creation
+- When reaching 64MB threshold, becomes immutable and a new MemTable is created
+- Immutable MemTable is flushed to disk as an SSTable
 
-The immutable table then gets flushed to disk as a Sorted Strings Table (SS Table), which is fairly simple since it's already sorted.
+**SSTables (On-Disk)**
+- Each SSTable consists of a data file and an index file
+- Index file maps keys to their offsets in the data file
+- Sparse index: Every 100th key cached in memory for faster lookups
 
-We maintain an index file alongside the SS Table's data file, which serves as our lookup for where the data lives for each key.
+### Write Path
 
-When creating this index file, we also keep in memory a reference to every 100th key, as a sparse index, allowing us to find a given key much more rapidly.
+1. Write to active MemTable (in-memory)
+2. When MemTable reaches 64MB, mark as immutable
+3. Flush immutable MemTable to disk as new SSTable
+4. Add to L0 (pre-compacted layer)
+5. Create new active MemTable for incoming writes
 
-Once the SS Table is created, we add it to the list of L0 SS Tables, these tables are pre-compacted, within a given level, the same key can exist multiple times.
+### Compaction
 
-Once L0 reaches a length of 10, this triggers compaction, the SS Tables are then compacted into one larger table, removing all duplicates and deleted values.
+**L0 → L1 Compaction** (triggered at 10 SSTables)
+- K-way merge of all L0 SSTables into single L1 SSTable
+- Removes duplicates (keeping newest values)
+- Removes tombstones (deleted keys)
 
-This new larger table gets added to the L1 SS Tables, this process is then repeated for L2 SS Tables.
+**L1 → L2 Compaction** (triggered at 10 SSTables)
+- Same merge process as L0 → L1
+- Further reduces read amplification
 
-When fetching a key, we look for the value in the following order:
+### Read Path
 
-MemTable -> Immutable MemTable -> L0 SS Tables -> L1 SS Tables -> L2 SS Tables
-The boundaries are as follows:
-Memory -> Memory -(slower after this)-> Disk -> Disk -> Disk
+Keys are searched in order from newest to oldest:
+
+```
+MemTable → Immutable MemTable → L0 SSTables → L1 SSTables → L2 SSTables
+ (RAM)   →       (RAM)         →    (Disk)   →    (Disk)   →    (Disk)
+```
+
+Range filtering using min/max keys allows skipping entire SSTables during lookups.
 
 ## Performance
-Please see [BENCHMARKS](BENCHMARKS.md) for up to date performance tracking.
+Please see [BENCHMARKS](BENCHMARKS.md) for up-to-date performance tracking.
 
 ## Usage
 
